@@ -6,25 +6,41 @@ import (
 	"log"
 	"net/http"
 	"user-service/internal/application"
+	"user-service/internal/config"
+	"user-service/internal/infrastructure/auth"
 	"user-service/internal/infrastructure/postgres"
 	userhttp "user-service/internal/interfaces/http"
+	"user-service/internal/interfaces/http/middleware"
 
 	_ "github.com/lib/pq"
 )
 
 func main() {
-	connStr := "postgres://admin:admin@postgres:5432/ecommerce?sslmode=disable"
-	db, err := sql.Open("postgres", connStr)
+
+	cfg := config.Load()
+
+	db, err := sql.Open("postgres", cfg.DBUrl)
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer db.Close()
 
 	repo := postgres.NewUserRepository(db)
 	service := application.NewUserService(repo)
-	handler := userhttp.NewUserHandler(service)
 
-	http.HandleFunc("/users/register", handler.Register)
+	jwtManager := auth.NewJWTManager(cfg.JWTSecret, cfg.JWTExpire)
 
-	fmt.Println("User Service running at :8081")
-	log.Fatal(http.ListenAndServe(":8081", nil))
+	handler := userhttp.NewUserHandler(service, jwtManager)
+
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("/users/register", handler.Register)
+	mux.HandleFunc("/users/login", handler.Login)
+
+	mux.Handle("/users/me", middleware.AuthMiddleware(jwtManager)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		userID := middleware.GetUserID(r)
+		w.Write([]byte(fmt.Sprintf("Hello user %d", userID)))
+	})))
+
+	http.ListenAndServe(":8081", mux)
 }

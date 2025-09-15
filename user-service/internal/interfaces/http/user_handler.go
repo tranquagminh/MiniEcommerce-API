@@ -6,6 +6,7 @@ import (
 	"strings"
 	"user-service/internal/application"
 	"user-service/internal/domain"
+	"user-service/internal/infrastructure/auth"
 )
 
 type RegisterRequest struct {
@@ -15,11 +16,12 @@ type RegisterRequest struct {
 }
 
 type UserHandler struct {
-	service *application.UserService
+	service    *application.UserService
+	jwtManager *auth.JWTManager
 }
 
-func NewUserHandler(s *application.UserService) *UserHandler {
-	return &UserHandler{service: s}
+func NewUserHandler(s *application.UserService, jwt *auth.JWTManager) *UserHandler {
+	return &UserHandler{service: s, jwtManager: jwt}
 }
 
 func (h *UserHandler) Register(w http.ResponseWriter, r *http.Request) {
@@ -77,10 +79,17 @@ func (h *UserHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	token, err := h.jwtManager.GenerateToken(user.ID)
+	if err != nil {
+		http.Error(w, "Could not generate token", http.StatusInternalServerError)
+		return
+	}
+
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"message": "Login successful",
 		"user_id": user.ID,
 		"email":   user.Email,
+		"token":   token,
 	})
 }
