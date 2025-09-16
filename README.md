@@ -1,3 +1,9 @@
+# PostgreSQL Account Information
+
+The account for PostgreSQL is:
+
+**Username:** admin@admin.com  
+**Password:** admin
 # MiniEcommerce-API Guide
 
 Welcome to the MiniEcommerce-API project! Follow this guide to set up and run the project on your local machine.
