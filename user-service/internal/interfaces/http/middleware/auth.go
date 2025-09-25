@@ -44,9 +44,9 @@ func AuthMiddleware(jwtManager *auth.JWTManager) func(http.Handler) http.Handler
 }
 
 // GetUserID : helper để lấy userID từ context trong handler
-func GetUserID(r *http.Request) int64 {
+func GetUserID(r *http.Request) uint {
 	if v := r.Context().Value(userIDKey); v != nil {
-		if id, ok := v.(int64); ok {
+		if id, ok := v.(uint); ok {
 			return id
 		}
 	}

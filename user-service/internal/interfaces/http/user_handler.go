@@ -7,12 +7,22 @@ import (
 	"user-service/internal/application"
 	"user-service/internal/domain"
 	"user-service/internal/infrastructure/auth"
+
+	"github.com/go-playground/validator/v10"
 )
 
+var validate = validator.New()
+
 type RegisterRequest struct {
+	Username string `json:"username" vakidate:"required, min=3, max=50"`
+	Email    string `json:"email" validate:"required,email"`
+	Password string `json:"password" validate:"required, min=6"`
+}
+
+type UserResponse struct {
+	ID       uint   `json:"id"`
 	Username string `json:"username"`
 	Email    string `json:"email"`
-	Password string `json:"password"`
 }
 
 type UserHandler struct {
@@ -35,8 +45,8 @@ func (h *UserHandler) Register(w http.ResponseWriter, r *http.Request) {
 	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
 	req.Password = strings.TrimSpace(req.Password)
 
-	if req.Email == "" || req.Password == "" {
-		http.Error(w, "email/password required", http.StatusBadRequest)
+	if err := validate.Struct(req); err != nil {
+		http.Error(w, "Invalid input: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -47,7 +57,11 @@ func (h *UserHandler) Register(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.service.Register(&u); err != nil {
-		http.Error(w, "Could not create user", http.StatusInternalServerError)
+		if strings.Contains((err.Error()), "duplicate") {
+			http.Error(w, "Email already in use", http.StatusConflict)
+			return
+		}
+		http.Error(w, "Could not register user", http.StatusInternalServerError)
 		return
 	}
 
@@ -88,8 +102,7 @@ func (h *UserHandler) Login(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"message": "Login successful",
-		"user_id": user.ID,
-		"email":   user.Email,
+		"user":    UserResponse{ID: user.ID, Username: user.Username, Email: user.Email},
 		"token":   token,
 	})
 }
