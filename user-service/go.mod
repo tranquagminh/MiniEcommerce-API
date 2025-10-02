@@ -32,4 +32,5 @@ require (
 	golang.org/x/text v0.29.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	gorm.io/gorm v1.31.0 // indirect
+	gorm.io/plugin/dbresolver v1.6.2
 )

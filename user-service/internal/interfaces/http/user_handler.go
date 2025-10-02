@@ -2,11 +2,13 @@ package http
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"user-service/internal/application"
 	"user-service/internal/domain"
 	"user-service/internal/infrastructure/auth"
+	"user-service/internal/interfaces/http/middleware"
 
 	"github.com/go-playground/validator/v10"
 )
@@ -105,4 +107,151 @@ func (h *UserHandler) Login(w http.ResponseWriter, r *http.Request) {
 		"user":    UserResponse{ID: user.ID, Username: user.Username, Email: user.Email},
 		"token":   token,
 	})
+}
+
+func (h *UserHandler) GetCurrentUser(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.GetUserID(r)
+	if userID == 0 {
+		http.Error(w, "User not found in context", http.StatusUnauthorized)
+		return
+	}
+	
+	ctx := r.Context()
+	user, err := h.service.GetUser(ctx, uint(userID))
+	if err != nil {
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
+	
+	// Don't send password
+	user.Password = ""
+	
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(user)
+}
+
+func (h *UserHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	
+	userID := middleware.GetUserID(r)
+	if userID == 0 {
+		http.Error(w, "User not found in context", http.StatusUnauthorized)
+		return
+	}
+	
+	var updateReq struct {
+		FirstName string `json:"first_name"`
+		LastName  string `json:"last_name"`
+		Username  string `json:"username"`
+	}
+	
+	if err := json.NewDecoder(r.Body).Decode(&updateReq); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	
+	ctx := r.Context()
+	
+	// Get current user
+	user, err := h.service.GetUser(ctx, uint(userID))
+	if err != nil {
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
+	
+	// Update fields
+	if updateReq.FirstName != "" {
+		user.FirstName = updateReq.FirstName
+	}
+	if updateReq.LastName != "" {
+		user.LastName = updateReq.LastName
+	}
+	if updateReq.Username != "" {
+		user.Username = updateReq.Username
+	}
+	
+	// Save updates
+	if err := h.service.UpdateUser(ctx, user); err != nil {
+		http.Error(w, "Failed to update user", http.StatusInternalServerError)
+		return
+	}
+	
+	// Return updated user (without password)
+	user.Password = ""
+	
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"message": "User updated successfully",
+		"user":    user,
+	})
+}
+
+func (h *UserHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	
+	// Parse query params
+	page := 1
+	pageSize := 10
+	
+	if p := r.URL.Query().Get("page"); p != "" {
+		fmt.Sscanf(p, "%d", &page)
+	}
+	
+	if ps := r.URL.Query().Get("page_size"); ps != "" {
+		fmt.Sscanf(ps, "%d", &pageSize)
+	}
+	
+	// Limit page size
+	if pageSize > 100 {
+		pageSize = 100
+	}
+	
+	ctx := r.Context()
+	users, total, err := h.service.ListUsers(ctx, page, pageSize)
+	if err != nil {
+		http.Error(w, "Failed to list users", http.StatusInternalServerError)
+		return
+	}
+	
+	// Remove passwords
+	for _, user := range users {
+		user.Password = ""
+	}
+	
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"users":      users,
+		"total":      total,
+		"page":       page,
+		"page_size":  pageSize,
+		"total_pages": (total + int64(pageSize) - 1) / int64(pageSize),
+	})
+}
+
+func (h *UserHandler) DeleteUser(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	
+	userID := middleware.GetUserID(r)
+	if userID == 0 {
+		http.Error(w, "User not found in context", http.StatusUnauthorized)
+		return
+	}
+	
+	ctx := r.Context()
+	if err := h.service.DeleteUser(ctx, uint(userID)); err != nil {
+		http.Error(w, "Failed to delete user", http.StatusInternalServerError)
+		return
+	}
+	
+	w.Header().Set("Content-Type", "application/json")
+	json.
 }
