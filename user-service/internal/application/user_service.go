@@ -101,6 +101,7 @@ func (s *UserService) Login(ctx context.Context, email, password string) (*domai
 		"last_login": &now,
 	})
 
+	user.LastLogin = &now
 	return user, nil
 }
 

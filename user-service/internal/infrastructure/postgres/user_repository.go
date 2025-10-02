@@ -10,11 +10,6 @@ import (
 	"gorm.io/gorm"
 )
 
-var (
-	ErrorUserNotFound  = errors.New("user not found")
-	ErrorDuplicateUser = errors.New("user already exists")
-)
-
 type UserRepository struct {
 	db *gorm.DB
 }
@@ -31,7 +26,7 @@ func (r *UserRepository) Create(ctx context.Context, user *domain.User) error {
 	result := r.db.WithContext(ctx).Create(user)
 	if result.Error != nil {
 		if IsDuplicateError(result.Error) {
-			return ErrorDuplicateUser
+			return ErrDuplicateUser
 		}
 		return fmt.Errorf("failed to create user: %w", result.Error)
 	}
@@ -46,7 +41,7 @@ func (r *UserRepository) GetByEmail(ctx context.Context, email string) (*domain.
 		First(&user).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrorUserNotFound
+			return nil, ErrUserNotFound
 		}
 		return nil, fmt.Errorf("failed to get user by email: %w", err)
 	}
@@ -58,7 +53,7 @@ func (r *UserRepository) GetByID(ctx context.Context, id uint) (*domain.User, er
 	err := r.db.WithContext(ctx).First(&user, id).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrorUserNotFound
+			return nil, ErrUserNotFound
 		}
 		return nil, fmt.Errorf("failed to get user by id: %w", err)
 	}
@@ -84,7 +79,7 @@ func (r *UserRepository) UpdateFields(ctx context.Context, id uint, fields map[s
 	}
 
 	if result.RowsAffected == 0 {
-		return ErrorUserNotFound
+		return ErrUserNotFound
 	}
 
 	return nil
@@ -155,25 +150,22 @@ func (r *UserRepository) List(ctx context.Context, offset, limit int) ([]*domain
 		Order("created_at DESC").
 		Find(&users).Error
 	if err != nil {
-		return nil, 0, fmt.Errorf("failed to count user: %w", err)
+		return nil, 0, fmt.Errorf("failed to list users: %w", err)
 	}
 
 	return users, total, nil
 }
 
 func (r *UserRepository) ExistsEmail(ctx context.Context, email string) (bool, error) {
-	var exists bool
-
+	var count int64
 	err := r.db.WithContext(ctx).
 		Model(&domain.User{}).
-		Select(1).
 		Where("email = ?", email).
-		Limit(1).
-		Scan(&exists).Error
+		Count(&count).Error
 
 	if err != nil {
 		return false, fmt.Errorf("failed to check mail exists: %w", err)
 	}
 
-	return exists, nil
+	return count > 0, nil
 }

@@ -15,7 +15,7 @@ import (
 	"user-service/internal/domain"
 	"user-service/internal/infrastructure/auth"
 	"user-service/internal/infrastructure/postgres"
-	userhttp "user-service/internal/interfaces/http"
+	userhttp "user-service/internal/interfaces/http/handlers"
 	"user-service/internal/interfaces/http/middleware"
 
 	_ "github.com/lib/pq"

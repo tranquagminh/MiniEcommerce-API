@@ -9,7 +9,7 @@ import (
 
 var (
 	ErrUserNotFound   = errors.New("user not found")
-	ErrDuplicator     = errors.New("user already exists")
+	ErrDuplicateUser  = errors.New("user already exists")
 	ErrOptimisticLock = errors.New("record was modified by another process")
 )
 
