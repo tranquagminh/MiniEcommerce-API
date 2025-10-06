@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"user-service/internal/application"
 	"user-service/internal/domain"
 
 	_ "github.com/lib/pq"
 	"gorm.io/gorm"
 )
+
+var _ application.UserRepository = (*UserRepository)(nil)
 
 type UserRepository struct {
 	db *gorm.DB
@@ -18,7 +21,7 @@ func NewUserRepository(db *gorm.DB) *UserRepository {
 	return &UserRepository{db: db}
 }
 
-func (r *UserRepository) WithTx(tx *gorm.DB) *UserRepository {
+func (r *UserRepository) WithTx(tx *gorm.DB) application.UserRepository {
 	return &UserRepository{db: tx}
 }
 
@@ -62,7 +65,7 @@ func (r *UserRepository) GetByID(ctx context.Context, id uint) (*domain.User, er
 
 func (r *UserRepository) Update(ctx context.Context, user *domain.User) error {
 	err := r.db.WithContext(ctx).Save(user)
-	if err != nil {
+	if err.Error != nil {
 		return fmt.Errorf("failed to update user: %w", err.Error)
 	}
 	return nil

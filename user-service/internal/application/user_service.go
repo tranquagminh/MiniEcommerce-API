@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 	"user-service/internal/domain"
-	"user-service/internal/infrastructure/postgres"
 
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
@@ -21,14 +20,19 @@ type UserRepository interface {
 	SoftDelete(ctx context.Context, id uint) error
 	ExistsEmail(ctx context.Context, email string) (bool, error)
 	List(ctx context.Context, offset, limit int) ([]*domain.User, int64, error)
+	WithTx(tx *gorm.DB) UserRepository
+}
+
+type TransactionManager interface {
+	ExecuteInTx(ctx context.Context, fn func(tx *gorm.DB) error) error
 }
 
 type UserService struct {
-	repo      *postgres.UserRepository
-	txManager *postgres.TransactionManager
+	repo      UserRepository
+	txManager TransactionManager
 }
 
-func NewUserService(repo *postgres.UserRepository, txManager *postgres.TransactionManager) *UserService {
+func NewUserService(repo UserRepository, txManager TransactionManager) *UserService {
 	return &UserService{
 		repo:      repo,
 		txManager: txManager,
@@ -97,9 +101,11 @@ func (s *UserService) Login(ctx context.Context, email, password string) (*domai
 
 	// Update last login time
 	now := time.Now()
-	s.repo.UpdateFields(ctx, user.ID, map[string]interface{}{
+	if err := s.repo.UpdateFields(ctx, user.ID, map[string]interface{}{
 		"last_login": &now,
-	})
+	}); err != nil {
+		fmt.Printf("Failed to update last login: %v\n", err)
+	}
 
 	user.LastLogin = &now
 	return user, nil

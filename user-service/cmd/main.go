@@ -27,7 +27,7 @@ func main() {
 
 	// Setup database connection with advanced config
 	dbConfig := &postgres.DBConfig{
-		Host:            "localhost", // from docker-compose
+		Host:            "postgres", // from docker-compose
 		Port:            5432,
 		User:            "admin",
 		Password:        "admin",
@@ -54,12 +54,11 @@ func main() {
 	}
 	defer sqlDB.Close()
 
-	log.Println("Dropping old users table if exists...")
-	db.Exec("DROP TABLE IF EXISTS users CASCADE")
 	// Auto migrate
 	if err := db.AutoMigrate(&domain.User{}); err != nil {
 		log.Fatal("Failed to migrate database:", err)
 	}
+	log.Print("Database migrated successfully")
 
 	// Initialize repositories and services
 	userRepo := postgres.NewUserRepository(db)
