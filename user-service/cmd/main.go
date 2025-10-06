@@ -12,7 +12,6 @@ import (
 
 	"user-service/internal/application"
 	"user-service/internal/config"
-	"user-service/internal/domain"
 	"user-service/internal/infrastructure/auth"
 	"user-service/internal/infrastructure/postgres"
 	userhttp "user-service/internal/interfaces/http/handlers"
@@ -55,7 +54,7 @@ func main() {
 	defer sqlDB.Close()
 
 	// Auto migrate
-	if err := db.AutoMigrate(&domain.User{}); err != nil {
+	if err := db.AutoMigrate(&postgres.UserModel{}); err != nil {
 		log.Fatal("Failed to migrate database:", err)
 	}
 	log.Print("Database migrated successfully")
