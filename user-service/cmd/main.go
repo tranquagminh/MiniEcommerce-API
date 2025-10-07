@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"fmt"
+	"encoding/json"
 	"log"
 	"net/http"
 	"os"
@@ -14,10 +14,12 @@ import (
 	"user-service/internal/config"
 	"user-service/internal/infrastructure/auth"
 	"user-service/internal/infrastructure/postgres"
+	"user-service/internal/infrastructure/redis"
 	userhttp "user-service/internal/interfaces/http/handlers"
 	"user-service/internal/interfaces/http/middleware"
 
 	_ "github.com/lib/pq"
+	"gorm.io/gorm"
 )
 
 func main() {
@@ -26,18 +28,18 @@ func main() {
 
 	// Setup database connection with advanced config
 	dbConfig := &postgres.DBConfig{
-		Host:            "postgres", // from docker-compose
-		Port:            5432,
-		User:            "admin",
-		Password:        "admin",
-		DBName:          "ecommerce",
-		SSLMode:         "disable",
-		MaxIdleConns:    10,
-		MaxOpenConns:    100,
-		ConnMaxLifeTime: 5 * time.Minute,
-		ConnMaxIdleTime: 1 * time.Minute,
-		RetryAttempts:   5,
-		RetryDelay:      2 * time.Second,
+		Host:            cfg.DBHost,
+		Port:            cfg.DBPort,
+		User:            cfg.DBUser,
+		Password:        cfg.DBPassword,
+		DBName:          cfg.DBName,
+		SSLMode:         cfg.DBSSLMode,
+		MaxIdleConns:    cfg.DBMaxIdleConns,
+		MaxOpenConns:    cfg.DBMaxOpenConns,
+		ConnMaxLifeTime: cfg.DBConnMaxLifeTime,
+		ConnMaxIdleTime: cfg.DBConnMaxIdleTime,
+		RetryAttempts:   cfg.DBRetryAttempts,
+		RetryDelay:      cfg.DBRetryDelay,
 	}
 
 	// Connect to database
@@ -53,16 +55,31 @@ func main() {
 	}
 	defer sqlDB.Close()
 
+	redisClient, err := redis.NewRedisClient(cfg.RedisAddr, cfg.RedisPassword, cfg.RedisDB)
+	if err != nil {
+		log.Printf("Failed to connect to Redis: %v. Continuing without Redis...", err)
+		// Continue without Redis - graceful degradation
+	} else {
+		defer redisClient.Close()
+		log.Println("Redis connected successfully")
+	}
+
 	// Auto migrate
 	if err := db.AutoMigrate(&postgres.UserModel{}); err != nil {
 		log.Fatal("Failed to migrate database:", err)
 	}
 	log.Print("Database migrated successfully")
 
+	// Initialize cache
+	var userCache *redis.UserCache
+	if redisClient != nil {
+		userCache = redis.NewUserCache(redisClient, cfg.CacheUserTTL)
+	}
+
 	// Initialize repositories and services
 	userRepo := postgres.NewUserRepository(db)
 	txManager := postgres.NewTransactionManager(db)
-	userService := application.NewUserService(userRepo, txManager)
+	userService := application.NewUserService(userRepo, txManager, userCache)
 
 	// Initialize JWT manager
 	jwtManager := auth.NewJWTManager(cfg.JWTSecret, cfg.JWTExpire)
@@ -70,13 +87,21 @@ func main() {
 	// Initialize handlers
 	userHandler := userhttp.NewUserHandler(userService, jwtManager)
 
+	// Initialize global rate limiter: 100 requests per second, burst of 200
+	globalRateLimiter := middleware.NewRateLimiter(100, 200, 30*time.Minute)
+
 	// Setup routes
-	mux := setupRoutes(userHandler, jwtManager)
+	mux := setupRoutes(userHandler, jwtManager, db)
+
+	// Apply rate limiting TRƯỚC CORS
+	handler := middleware.RateLimitMiddleware(globalRateLimiter)(
+		middleware.CORS(mux),
+	)
 
 	// Create HTTP server
 	srv := &http.Server{
 		Addr:         ":8081",
-		Handler:      mux,
+		Handler:      handler,
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,
@@ -108,22 +133,38 @@ func main() {
 	log.Println("Server exited")
 }
 
-func setupRoutes(handler *userhttp.UserHandler, jwtManager *auth.JWTManager) *http.ServeMux {
+func setupRoutes(handler *userhttp.UserHandler, jwtManager *auth.JWTManager, db *gorm.DB) *http.ServeMux {
 	mux := http.NewServeMux()
 
 	// Public routes
-	mux.HandleFunc("/health", healthCheck)
-	mux.HandleFunc("/users/register", handler.Register)
-	mux.HandleFunc("/users/login", handler.Login)
+	mux.HandleFunc("/health", healthCheck(db))
+
+	// Register với rate limit chặt: 5 requests/minute (0.083/s)
+	mux.Handle("/users/register",
+		middleware.CustomRateLimitMiddleware(0.083, 1)(
+			http.HandlerFunc(handler.Register),
+		),
+	)
+
+	// Login với rate limit vừa: 10 requests/minute (0.167/s)
+	mux.Handle("/users/login",
+		middleware.CustomRateLimitMiddleware(0.167, 2)(
+			http.HandlerFunc(handler.Login),
+		),
+	)
 
 	// Protected routes
 	mux.Handle("/users/me", middleware.AuthMiddleware(jwtManager)(
 		http.HandlerFunc(handler.GetCurrentUser),
 	))
 
-	mux.Handle("/users/update", middleware.AuthMiddleware(jwtManager)(
-		http.HandlerFunc(handler.UpdateUser),
-	))
+	mux.Handle("/users/update",
+		middleware.AuthMiddleware(jwtManager)(
+			middleware.UserRateLimitMiddleware(2, 5)( // 2 req/s per user
+				http.HandlerFunc(handler.UpdateUser),
+			),
+		),
+	)
 
 	mux.Handle("/users", middleware.AuthMiddleware(jwtManager)(
 		http.HandlerFunc(handler.ListUsers),
@@ -136,8 +177,18 @@ func setupRoutes(handler *userhttp.UserHandler, jwtManager *auth.JWTManager) *ht
 	return mux
 }
 
-func healthCheck(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, `{"status":"healthy","timestamp":"%s"}`, time.Now().Format(time.RFC3339))
+func healthCheck(db *gorm.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		sqlDB, _ := db.DB()
+		if err := sqlDB.Ping(); err != nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			json.NewEncoder(w).Encode(map[string]string{
+				"status": "unhealthy",
+				"error":  "database connection failed",
+			})
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]string{"status": "healthy"})
+	}
 }

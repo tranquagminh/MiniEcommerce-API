@@ -51,7 +51,24 @@ func (h *UserHandler) Register(w http.ResponseWriter, r *http.Request) {
 	// FIX: Remove spaces in validation tags
 	// validate:"required,min=3,max=50" NOT "required, min=3, max=50"
 	if err := validate.Struct(req); err != nil {
-		http.Error(w, "Invalid input: "+err.Error(), http.StatusBadRequest)
+		validationErrors, ok := err.(validator.ValidationErrors)
+		if !ok {
+			http.Error(w, "Validation failed", http.StatusBadRequest)
+			return
+		}
+
+		// Tạo map chứa lỗi cho từng field
+		errorMessages := make(map[string]string)
+		for _, e := range validationErrors {
+			errorMessages[strings.ToLower(e.Field())] = formatValidationError(e)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error":  "Validation failed",
+			"fields": errorMessages,
+		})
 		return
 	}
 
@@ -267,4 +284,19 @@ func (h *UserHandler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 		"message": "User delete successfully",
 		"user_id": userID,
 	})
+}
+
+func formatValidationError(fe validator.FieldError) string {
+	switch fe.Tag() {
+	case "required":
+		return fmt.Sprintf("%s is required", fe.Field())
+	case "email":
+		return "Invalid email format"
+	case "min":
+		return fmt.Sprintf("%s must be at least %s characters", fe.Field(), fe.Param())
+	case "max":
+		return fmt.Sprintf("%s must be at most %s characters", fe.Field(), fe.Param())
+	default:
+		return fmt.Sprintf("%s is invalid", fe.Field())
+	}
 }

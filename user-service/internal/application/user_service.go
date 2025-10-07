@@ -11,6 +11,15 @@ import (
 	"gorm.io/gorm"
 )
 
+type UserCache interface {
+	Set(ctx context.Context, user *domain.User) error
+	Get(ctx context.Context, userID uint) (*domain.User, error)
+	Delete(ctx context.Context, userID uint) error
+	SetByEmail(ctx context.Context, email string, user *domain.User) error
+	GetByEmail(ctx context.Context, email string) (*domain.User, error)
+	DeleteByEmail(ctx context.Context, email string) error
+}
+
 type UserRepository interface {
 	Create(ctx context.Context, user *domain.User) error
 	GetByEmail(ctx context.Context, email string) (*domain.User, error)
@@ -30,12 +39,14 @@ type TransactionManager interface {
 type UserService struct {
 	repo      UserRepository
 	txManager TransactionManager
+	cache     UserCache
 }
 
-func NewUserService(repo UserRepository, txManager TransactionManager) *UserService {
+func NewUserService(repo UserRepository, txManager TransactionManager, cache UserCache) *UserService {
 	return &UserService{
 		repo:      repo,
 		txManager: txManager,
+		cache:     cache,
 	}
 }
 
@@ -112,11 +123,42 @@ func (s *UserService) Login(ctx context.Context, email, password string) (*domai
 }
 
 func (s *UserService) GetUser(ctx context.Context, id uint) (*domain.User, error) {
-	return s.repo.GetByID(ctx, id)
+	// Try cache first
+	if s.cache != nil {
+		user, err := s.cache.Get(ctx, id)
+		if err == nil {
+			return user, nil
+		}
+		// If error, continue to database
+	}
+
+	// Get from database
+	user, err := s.repo.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	// Update cache
+	if s.cache != nil {
+		_ = s.cache.Set(ctx, user)
+	}
+
+	return user, nil
 }
 
 func (s *UserService) UpdateUser(ctx context.Context, user *domain.User) error {
-	return s.repo.Update(ctx, user)
+	err := s.repo.Update(ctx, user)
+	if err != nil {
+		return err
+	}
+
+	// Invalidate cache
+	if s.cache != nil {
+		_ = s.cache.Delete(ctx, user.ID)
+		_ = s.cache.DeleteByEmail(ctx, user.Email)
+	}
+
+	return nil
 }
 
 func (s *UserService) DeleteUser(ctx context.Context, id uint) error {
