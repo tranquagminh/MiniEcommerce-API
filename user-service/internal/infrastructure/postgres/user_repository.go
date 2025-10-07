@@ -29,7 +29,7 @@ func (r *UserRepository) Create(ctx context.Context, user *domain.User) error {
 	model := &UserModel{}
 	model.FromDomain(user)
 
-	result := r.db.WithContext(ctx).Create(user)
+	result := r.db.WithContext(ctx).Create(model)
 	if result.Error != nil {
 		if IsDuplicateError(result.Error) {
 			return ErrDuplicateUser
@@ -75,7 +75,7 @@ func (r *UserRepository) Update(ctx context.Context, user *domain.User) error {
 	model := &UserModel{}
 	model.FromDomain(user)
 
-	err := r.db.WithContext(ctx).Save(user)
+	err := r.db.WithContext(ctx).Save(model)
 	if err.Error != nil {
 		return fmt.Errorf("failed to update user: %w", err.Error)
 	}
