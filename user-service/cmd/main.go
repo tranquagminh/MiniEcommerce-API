@@ -55,10 +55,13 @@ func main() {
 	}
 	defer sqlDB.Close()
 
-	redisClient, err := redis.NewRedisClient(cfg.RedisAddr, cfg.RedisPassword, cfg.RedisDB)
+	// Initialize Redis (optional - graceful degradation)
+	var redisClient *redis.RedisClient
+	redisClient, err = redis.NewRedisClient(cfg.RedisAddr, cfg.RedisPassword, cfg.RedisDB)
 	if err != nil {
-		log.Printf("Failed to connect to Redis: %v. Continuing without Redis...", err)
-		// Continue without Redis - graceful degradation
+		log.Printf("WARNING: Failed to connect to Redis: %v", err)
+		log.Printf("Continuing without Redis - using in-memory cache and rate limiting")
+		redisClient = nil
 	} else {
 		defer redisClient.Close()
 		log.Println("Redis connected successfully")
@@ -71,7 +74,7 @@ func main() {
 	log.Print("Database migrated successfully")
 
 	// Initialize cache
-	var userCache *redis.UserCache
+	var userCache application.UserCache
 	if redisClient != nil {
 		userCache = redis.NewUserCache(redisClient, cfg.CacheUserTTL)
 	}
@@ -87,16 +90,35 @@ func main() {
 	// Initialize handlers
 	userHandler := userhttp.NewUserHandler(userService, jwtManager)
 
-	// Initialize global rate limiter: 100 requests per second, burst of 200
-	globalRateLimiter := middleware.NewRateLimiter(100, 200, 30*time.Minute)
+	// Setup routes with proper configuration
+	mux := setupRoutes(userHandler, jwtManager, db, redisClient, cfg)
 
-	// Setup routes
-	mux := setupRoutes(userHandler, jwtManager, db)
+	// Apply middleware chain
+	var handler http.Handler = mux
 
-	// Apply rate limiting TRƯỚC CORS
-	handler := middleware.RateLimitMiddleware(globalRateLimiter)(
-		middleware.CORS(mux),
-	)
+	// Apply global rate limiting
+	if redisClient != nil {
+		// Use Redis-based rate limiting for distributed systems
+		globalRateLimiter := middleware.NewRedisRateLimiter(
+			redisClient,
+			int(cfg.RateLimitGlobal),
+			time.Minute,
+		)
+		handler = middleware.RedisRateLimitMiddleware(globalRateLimiter)(handler)
+		log.Println("Using Redis-based rate limiting")
+	} else {
+		// Fallback to in-memory rate limiting
+		globalRateLimiter := middleware.NewRateLimiter(
+			cfg.RateLimitGlobal,
+			cfg.RateLimitGlobalBurst,
+			30*time.Minute,
+		)
+		handler = middleware.RateLimitMiddleware(globalRateLimiter)(handler)
+		log.Println("Using in-memory rate limiting")
+	}
+
+	// Apply CORS
+	handler = middleware.CORS(handler)
 
 	// Create HTTP server
 	srv := &http.Server{
@@ -110,6 +132,12 @@ func main() {
 	// Start server in goroutine
 	go func() {
 		log.Printf("Server starting on port %s", srv.Addr)
+		log.Printf("Environment: %s", getEnv("ENVIRONMENT", "development"))
+		log.Printf("Features enabled:")
+		log.Printf("  - Database: PostgreSQL")
+		log.Printf("  - Cache: %v", redisClient != nil)
+		log.Printf("  - Rate Limiting: %v (Redis: %v)", true, redisClient != nil)
+
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Failed to start server: %v", err)
 		}
@@ -133,62 +161,165 @@ func main() {
 	log.Println("Server exited")
 }
 
-func setupRoutes(handler *userhttp.UserHandler, jwtManager *auth.JWTManager, db *gorm.DB) *http.ServeMux {
+func setupRoutes(
+	handler *userhttp.UserHandler,
+	jwtManager *auth.JWTManager,
+	db *gorm.DB,
+	redisClient *redis.RedisClient,
+	cfg *config.Config,
+) *http.ServeMux {
 	mux := http.NewServeMux()
 
-	// Public routes
-	mux.HandleFunc("/health", healthCheck(db))
+	// Health check - includes Redis status
+	mux.HandleFunc("/health", healthCheck(db, redisClient))
 
-	// Register với rate limit chặt: 5 requests/minute (0.083/s)
-	mux.Handle("/users/register",
-		middleware.CustomRateLimitMiddleware(0.083, 1)(
-			http.HandlerFunc(handler.Register),
-		),
-	)
+	// Public routes with specific rate limits
+	if redisClient != nil {
+		// Redis-based rate limiting
+		// Register: 5 requests per minute
+		mux.Handle("/users/register",
+			middleware.CustomRedisRateLimitMiddleware(
+				redisClient,
+				5,
+				time.Minute,
+			)(http.HandlerFunc(handler.Register)),
+		)
 
-	// Login với rate limit vừa: 10 requests/minute (0.167/s)
-	mux.Handle("/users/login",
-		middleware.CustomRateLimitMiddleware(0.167, 2)(
-			http.HandlerFunc(handler.Login),
-		),
-	)
-
-	// Protected routes
-	mux.Handle("/users/me", middleware.AuthMiddleware(jwtManager)(
-		http.HandlerFunc(handler.GetCurrentUser),
-	))
-
-	mux.Handle("/users/update",
-		middleware.AuthMiddleware(jwtManager)(
-			middleware.UserRateLimitMiddleware(2, 5)( // 2 req/s per user
-				http.HandlerFunc(handler.UpdateUser),
+		// Login: 10 requests per minute
+		mux.Handle("/users/login",
+			middleware.CustomRedisRateLimitMiddleware(
+				redisClient,
+				10,
+				time.Minute,
+			)(http.HandlerFunc(handler.Login)),
+		)
+	} else {
+		// In-memory rate limiting fallback
+		mux.Handle("/users/register",
+			middleware.CustomRateLimitMiddleware(0.083, 1)(
+				http.HandlerFunc(handler.Register),
 			),
+		)
+
+		mux.Handle("/users/login",
+			middleware.CustomRateLimitMiddleware(0.167, 2)(
+				http.HandlerFunc(handler.Login),
+			),
+		)
+	}
+
+	// Protected routes with authentication
+	mux.Handle("/users/me",
+		middleware.AuthMiddleware(jwtManager)(
+			http.HandlerFunc(handler.GetCurrentUser),
 		),
 	)
 
-	mux.Handle("/users", middleware.AuthMiddleware(jwtManager)(
-		http.HandlerFunc(handler.ListUsers),
-	))
+	// Protected routes with auth + user-based rate limiting
+	if redisClient != nil {
+		// Redis-based user rate limiting
+		mux.Handle("/users/update",
+			middleware.AuthMiddleware(jwtManager)(
+				middleware.RedisUserRateLimitMiddleware(redisClient, 10, time.Minute)(
+					http.HandlerFunc(handler.UpdateUser),
+				),
+			),
+		)
 
-	mux.Handle("/users/delete", middleware.AuthMiddleware(jwtManager)(
-		http.HandlerFunc(handler.DeleteUser),
-	))
+		mux.Handle("/users/delete",
+			middleware.AuthMiddleware(jwtManager)(
+				middleware.RedisUserRateLimitMiddleware(redisClient, 5, time.Minute)(
+					http.HandlerFunc(handler.DeleteUser),
+				),
+			),
+		)
+	} else {
+		// In-memory user rate limiting
+		mux.Handle("/users/update",
+			middleware.AuthMiddleware(jwtManager)(
+				middleware.UserRateLimitMiddleware(2, 5)(
+					http.HandlerFunc(handler.UpdateUser),
+				),
+			),
+		)
+
+		mux.Handle("/users/delete",
+			middleware.AuthMiddleware(jwtManager)(
+				middleware.UserRateLimitMiddleware(1, 2)(
+					http.HandlerFunc(handler.DeleteUser),
+				),
+			),
+		)
+	}
+
+	// List users - simple auth without extra rate limiting
+	mux.Handle("/users",
+		middleware.AuthMiddleware(jwtManager)(
+			http.HandlerFunc(handler.ListUsers),
+		),
+	)
 
 	return mux
 }
 
-func healthCheck(db *gorm.DB) http.HandlerFunc {
+func healthCheck(db *gorm.DB, redisClient *redis.RedisClient) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		health := map[string]interface{}{
+			"status":    "healthy",
+			"timestamp": time.Now().UTC(),
+			"services":  make(map[string]interface{}),
+		}
+
+		// Check database
 		sqlDB, _ := db.DB()
 		if err := sqlDB.Ping(); err != nil {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			json.NewEncoder(w).Encode(map[string]string{
-				"status": "unhealthy",
-				"error":  "database connection failed",
-			})
-			return
+			health["status"] = "unhealthy"
+			health["services"].(map[string]interface{})["database"] = map[string]interface{}{
+				"status": "down",
+				"error":  err.Error(),
+			}
+		} else {
+			health["services"].(map[string]interface{})["database"] = map[string]interface{}{
+				"status": "up",
+			}
 		}
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]string{"status": "healthy"})
+
+		// Check Redis
+		if redisClient != nil {
+			ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+			defer cancel()
+
+			if err := redisClient.Ping(ctx); err != nil {
+				health["services"].(map[string]interface{})["redis"] = map[string]interface{}{
+					"status": "down",
+					"error":  err.Error(),
+				}
+			} else {
+				health["services"].(map[string]interface{})["redis"] = map[string]interface{}{
+					"status": "up",
+				}
+			}
+		} else {
+			health["services"].(map[string]interface{})["redis"] = map[string]interface{}{
+				"status": "not configured",
+			}
+		}
+
+		// Determine overall status
+		statusCode := http.StatusOK
+		if health["status"] == "unhealthy" {
+			statusCode = http.StatusServiceUnavailable
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(statusCode)
+		json.NewEncoder(w).Encode(health)
 	}
+}
+
+func getEnv(key, fallback string) string {
+	if value, ok := os.LookupEnv(key); ok {
+		return value
+	}
+	return fallback
 }
