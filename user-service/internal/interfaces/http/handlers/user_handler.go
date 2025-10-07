@@ -235,10 +235,16 @@ func (h *UserHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Limit page size
+	if pageSize <= 0 {
+		pageSize = 10 // default
+	}
 	if pageSize > 100 {
 		pageSize = 100
 	}
 
+	if page <= 0 {
+		page = 1
+	}
 	ctx := r.Context()
 	users, total, err := h.service.ListUsers(ctx, page, pageSize)
 	if err != nil {

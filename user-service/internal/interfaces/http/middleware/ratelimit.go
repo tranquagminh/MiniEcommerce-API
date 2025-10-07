@@ -67,13 +67,24 @@ func (rl *RateLimiter) cleanupVisitors() {
 	for {
 		<-ticker.C
 
-		rl.mu.Lock()
+		// Collect expired IPs first
+		rl.mu.RLock()
+		var expiredIPs []string
 		for ip, v := range rl.visitors {
 			if time.Since(v.lastSeen) > rl.ttl {
-				delete(rl.visitors, ip)
+				expiredIPs = append(expiredIPs, ip)
 			}
 		}
-		rl.mu.Unlock()
+		rl.mu.RUnlock()
+
+		// Delete with write lock
+		if len(expiredIPs) > 0 {
+			rl.mu.Lock()
+			for _, ip := range expiredIPs {
+				delete(rl.visitors, ip)
+			}
+			rl.mu.Unlock()
+		}
 	}
 }
 
@@ -112,7 +123,7 @@ func CustomRateLimitMiddleware(requestsPerSecond float64, burst int) func(http.H
 
 			// Add rate limit headers
 			w.Header().Set("X-RateLimit-Limit", fmt.Sprintf("%.0f", requestsPerSecond))
-			w.Header().Set("X-RateLimit-Remaining", fmt.Sprintf("%d", l.Burst()-int(l.Tokens())))
+			w.Header().Set("X-RateLimit-Remaining", fmt.Sprintf("%d", int(l.Tokens())))
 			w.Header().Set("X-RateLimit-Reset", fmt.Sprintf("%d", time.Now().Add(time.Second).Unix()))
 
 			next.ServeHTTP(w, r)

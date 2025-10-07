@@ -113,12 +113,13 @@ func (s *UserService) Login(ctx context.Context, email, password string) (*domai
 	// Update last login time
 	now := time.Now()
 	if err := s.repo.UpdateFields(ctx, user.ID, map[string]interface{}{
-		"last_login": &now,
+		"last_login": now,
 	}); err != nil {
 		fmt.Printf("Failed to update last login: %v\n", err)
 	}
 
-	user.LastLogin = &now
+	nowCopy := now
+	user.LastLogin = &nowCopy
 	return user, nil
 }
 

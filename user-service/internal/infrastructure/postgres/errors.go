@@ -11,6 +11,7 @@ var (
 	ErrUserNotFound   = errors.New("user not found")
 	ErrDuplicateUser  = errors.New("user already exists")
 	ErrOptimisticLock = errors.New("record was modified by another process")
+	ErrEmailExists    = errors.New("email already exists")
 )
 
 func IsDuplicateError(err error) bool {
