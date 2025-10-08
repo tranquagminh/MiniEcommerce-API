@@ -34,6 +34,9 @@ services:
       DB_USER: admin
       DB_PASSWORD: admin
       DB_NAME: ecommerce
+      DB_SSLMODE: disable
+      JWT_SECRET: production-secret-key-change-this
+      JWT_EXPIRE: 24h
 
 volumes:
   pgdata:
