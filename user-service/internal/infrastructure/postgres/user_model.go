@@ -14,6 +14,9 @@ type UserModel struct {
 	Password  string         `gorm:"not null" json:"-"` // json:"-" to never expose
 	FirstName string         `gorm:"size:100" json:"first_name,omitempty"`
 	LastName  string         `gorm:"size:100" json:"last_name,omitempty"`
+	Phone     string         `gorm:"size:20" json:"phone,omitempty"`
+	Gender    string         `gorm:"size:10" json:"gender,omitempty"` // male, female, other
+	Birthday  *time.Time     `gorm:"type:date" json:"birthday,omitempty"`
 	LastLogin *time.Time     `json:"last_login,omitempty"`
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
@@ -37,6 +40,9 @@ func (m *UserModel) ToDomain() *domain.User {
 		Password:  m.Password,
 		FirstName: m.FirstName,
 		LastName:  m.LastName,
+		Phone:     m.Phone,  // ✅
+		Gender:    m.Gender, // ✅
+		Birthday:  m.Birthday,
 		LastLogin: m.LastLogin,
 		CreatedAt: m.CreatedAt,
 		UpdatedAt: m.UpdatedAt,
@@ -53,6 +59,9 @@ func (m *UserModel) FromDomain(user *domain.User) {
 	m.Password = user.Password
 	m.FirstName = user.FirstName
 	m.LastName = user.LastName
+	m.Phone = user.Phone   // ✅
+	m.Gender = user.Gender // ✅
+	m.Birthday = user.Birthday
 	m.LastLogin = user.LastLogin
 	m.CreatedAt = user.CreatedAt
 	m.UpdatedAt = user.UpdatedAt

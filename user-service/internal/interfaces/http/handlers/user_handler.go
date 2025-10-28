@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 	"user-service/internal/application"
 	"user-service/internal/domain"
 	"user-service/internal/infrastructure/auth"
 	"user-service/internal/interfaces/http/middleware"
 
 	"github.com/go-playground/validator/v10"
+	"golang.org/x/crypto/bcrypt"
 )
 
 var validate = validator.New()
@@ -25,6 +27,22 @@ type UserResponse struct {
 	ID       uint   `json:"id"`
 	Username string `json:"username"`
 	Email    string `json:"email"`
+}
+
+type UpdateProfileRequest struct {
+	FirstName string `json:"first_name"`
+	LastName  string `json:"last_name"`
+	Username  string `json:"username"`
+	Phone     string `json:"phone" validate:"omitempty,e164"` // E.164 format
+	Gender    string `json:"gender" validate:"omitempty,oneof=male female other"`
+	Birthday  string `json:"birthday" validate:"omitempty"` // Format: YYYY-MM-DD
+}
+
+// NEW: Change Password Request ✅
+type ChangePasswordRequest struct {
+	CurrentPassword string `json:"current_password" validate:"required"`
+	NewPassword     string `json:"new_password" validate:"required,min=6"`
+	ConfirmPassword string `json:"confirm_password" validate:"required,eqfield=NewPassword"`
 }
 
 type UserHandler struct {
@@ -131,7 +149,7 @@ func (h *UserHandler) Login(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"message": "Login successful",
-		"user":    UserResponse{ID: user.ID, Username: user.Username, Email: user.Email},
+		"user":    user,
 		"token":   token,
 	})
 }
@@ -155,6 +173,173 @@ func (h *UserHandler) GetCurrentUser(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(user)
+}
+
+func (h *UserHandler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	userID := middleware.GetUserID(r)
+	if userID == 0 {
+		http.Error(w, "User not found in context", http.StatusUnauthorized)
+		return
+	}
+
+	var updateReq UpdateProfileRequest
+	if err := json.NewDecoder(r.Body).Decode(&updateReq); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Validate request
+	if err := validate.Struct(updateReq); err != nil {
+		validationErrors, ok := err.(validator.ValidationErrors)
+		if !ok {
+			http.Error(w, "Validation failed", http.StatusBadRequest)
+			return
+		}
+
+		errorMessages := make(map[string]string)
+		for _, e := range validationErrors {
+			errorMessages[strings.ToLower(e.Field())] = formatValidationError(e)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error":  "Validation failed",
+			"fields": errorMessages,
+		})
+		return
+	}
+
+	ctx := r.Context()
+
+	// Get current user
+	user, err := h.service.GetUser(ctx, uint(userID))
+	if err != nil {
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
+
+	// Update fields
+	if updateReq.FirstName != "" {
+		user.FirstName = updateReq.FirstName
+	}
+	if updateReq.LastName != "" {
+		user.LastName = updateReq.LastName
+	}
+	if updateReq.Username != "" {
+		user.Username = updateReq.Username
+	}
+	if updateReq.Phone != "" {
+		user.Phone = updateReq.Phone
+	}
+	if updateReq.Gender != "" {
+		user.Gender = updateReq.Gender
+	}
+	if updateReq.Birthday != "" {
+		// Parse birthday string to time.Time
+		birthday, err := time.Parse("2006-01-02", updateReq.Birthday)
+		if err != nil {
+			http.Error(w, "Invalid birthday format. Use YYYY-MM-DD", http.StatusBadRequest)
+			return
+		}
+		user.Birthday = &birthday
+	}
+
+	// Save updates
+	if err := h.service.UpdateUser(ctx, user); err != nil {
+		http.Error(w, "Failed to update user", http.StatusInternalServerError)
+		return
+	}
+
+	// Return updated user (without password)
+	user.Password = ""
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"message": "Profile updated successfully",
+		"user":    user,
+	})
+}
+
+func (h *UserHandler) ChangePassword(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	userID := middleware.GetUserID(r)
+	if userID == 0 {
+		http.Error(w, "User not found in context", http.StatusUnauthorized)
+		return
+	}
+
+	var req ChangePasswordRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Validate request
+	if err := validate.Struct(req); err != nil {
+		validationErrors, ok := err.(validator.ValidationErrors)
+		if !ok {
+			http.Error(w, "Validation failed", http.StatusBadRequest)
+			return
+		}
+
+		errorMessages := make(map[string]string)
+		for _, e := range validationErrors {
+			errorMessages[strings.ToLower(e.Field())] = formatValidationError(e)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error":  "Validation failed",
+			"fields": errorMessages,
+		})
+		return
+	}
+
+	ctx := r.Context()
+
+	// Get current user
+	user, err := h.service.GetUser(ctx, uint(userID))
+	if err != nil {
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
+
+	// Verify current password
+	err = bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.CurrentPassword))
+	if err != nil {
+		http.Error(w, "Current password is incorrect", http.StatusUnauthorized)
+		return
+	}
+
+	// Hash new password
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
+	if err != nil {
+		http.Error(w, "Failed to hash password", http.StatusInternalServerError)
+		return
+	}
+
+	// Update password
+	user.Password = string(hashedPassword)
+	if err := h.service.UpdateUser(ctx, user); err != nil {
+		http.Error(w, "Failed to update password", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"message": "Password changed successfully",
+	})
 }
 
 func (h *UserHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {

@@ -13,6 +13,9 @@ type User struct {
 	Password  string
 	FirstName string
 	LastName  string
+	Phone     string
+	Gender    string
+	Birthday  *time.Time
 	LastLogin *time.Time
 	CreatedAt time.Time
 	UpdatedAt time.Time

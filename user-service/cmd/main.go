@@ -170,31 +170,23 @@ func setupRoutes(
 ) *http.ServeMux {
 	mux := http.NewServeMux()
 
-	// Health check - includes Redis status
+	// Health check
 	mux.HandleFunc("/health", healthCheck(db, redisClient))
 
-	// Public routes with specific rate limits
+	// Public routes
 	if redisClient != nil {
-		// Redis-based rate limiting
-		// Register: 5 requests per minute
 		mux.Handle("/users/register",
-			middleware.CustomRedisRateLimitMiddleware(
-				redisClient,
-				5,
-				time.Minute,
-			)(http.HandlerFunc(handler.Register)),
+			middleware.CustomRedisRateLimitMiddleware(redisClient, 5, time.Minute)(
+				http.HandlerFunc(handler.Register),
+			),
 		)
 
-		// Login: 10 requests per minute
 		mux.Handle("/users/login",
-			middleware.CustomRedisRateLimitMiddleware(
-				redisClient,
-				10,
-				time.Minute,
-			)(http.HandlerFunc(handler.Login)),
+			middleware.CustomRedisRateLimitMiddleware(redisClient, 10, time.Minute)(
+				http.HandlerFunc(handler.Login),
+			),
 		)
 	} else {
-		// In-memory rate limiting fallback
 		mux.Handle("/users/register",
 			middleware.CustomRateLimitMiddleware(0.083, 1)(
 				http.HandlerFunc(handler.Register),
@@ -208,16 +200,53 @@ func setupRoutes(
 		)
 	}
 
-	// Protected routes with authentication
+	// Protected routes
 	mux.Handle("/users/me",
 		middleware.AuthMiddleware(jwtManager)(
 			http.HandlerFunc(handler.GetCurrentUser),
 		),
 	)
 
-	// Protected routes with auth + user-based rate limiting
+	// NEW: Update Profile ✅
 	if redisClient != nil {
-		// Redis-based user rate limiting
+		mux.Handle("/users/profile",
+			middleware.AuthMiddleware(jwtManager)(
+				middleware.RedisUserRateLimitMiddleware(redisClient, 10, time.Minute)(
+					http.HandlerFunc(handler.UpdateProfile),
+				),
+			),
+		)
+	} else {
+		mux.Handle("/users/profile",
+			middleware.AuthMiddleware(jwtManager)(
+				middleware.UserRateLimitMiddleware(2, 5)(
+					http.HandlerFunc(handler.UpdateProfile),
+				),
+			),
+		)
+	}
+
+	// NEW: Change Password ✅
+	if redisClient != nil {
+		mux.Handle("/users/change-password",
+			middleware.AuthMiddleware(jwtManager)(
+				middleware.RedisUserRateLimitMiddleware(redisClient, 5, time.Minute)(
+					http.HandlerFunc(handler.ChangePassword),
+				),
+			),
+		)
+	} else {
+		mux.Handle("/users/change-password",
+			middleware.AuthMiddleware(jwtManager)(
+				middleware.UserRateLimitMiddleware(1, 2)(
+					http.HandlerFunc(handler.ChangePassword),
+				),
+			),
+		)
+	}
+
+	// Keep old /users/update for backward compatibility
+	if redisClient != nil {
 		mux.Handle("/users/update",
 			middleware.AuthMiddleware(jwtManager)(
 				middleware.RedisUserRateLimitMiddleware(redisClient, 10, time.Minute)(
@@ -234,7 +263,6 @@ func setupRoutes(
 			),
 		)
 	} else {
-		// In-memory user rate limiting
 		mux.Handle("/users/update",
 			middleware.AuthMiddleware(jwtManager)(
 				middleware.UserRateLimitMiddleware(2, 5)(
@@ -252,7 +280,7 @@ func setupRoutes(
 		)
 	}
 
-	// List users - simple auth without extra rate limiting
+	// List users
 	mux.Handle("/users",
 		middleware.AuthMiddleware(jwtManager)(
 			http.HandlerFunc(handler.ListUsers),
