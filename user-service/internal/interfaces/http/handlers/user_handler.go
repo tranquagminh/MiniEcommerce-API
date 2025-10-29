@@ -358,6 +358,7 @@ func (h *UserHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 		FirstName string `json:"first_name"`
 		LastName  string `json:"last_name"`
 		Username  string `json:"username"`
+		
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&updateReq); err != nil {
