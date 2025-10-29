@@ -1,4 +1,3 @@
-version: "3.8"
 services:
   postgres:
     image: postgres:15
@@ -42,7 +41,7 @@ services:
     container_name: product-service
     depends_on:
       - postgres
-      - redis
+      # - redis
       - user-service
     ports:
       - "8082:8082"
