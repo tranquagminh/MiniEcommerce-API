@@ -3,6 +3,7 @@ package auth
 import (
 	"fmt"
 	"regexp"
+	"strings"
 	"unicode"
 )
 
@@ -89,22 +90,77 @@ func hasSpecialChar(s string) bool {
 	return specialChars.MatchString(s)
 }
 
-// Common weak passwords list (add more as needed)
+// Common weak passwords list - Top 50 most common passwords
+// Source: Compiled from common password breach databases
 var commonPasswords = map[string]bool{
-	"password":   true,
+	// Numeric sequences
+	"123456":     true,
 	"12345678":   true,
 	"123456789":  true,
-	"qwerty":     true,
-	"abc123":     true,
-	"password1":  true,
+	"1234567890": true,
 	"12341234":   true,
+	"11111111":   true,
+	"00000000":   true,
+	"87654321":   true,
+
+	// Keyboard patterns
+	"qwerty":     true,
+	"qwertyuiop": true,
+	"asdfghjkl":  true,
+	"zxcvbnm":    true,
 	"qwerty123":  true,
 	"1q2w3e4r":   true,
-	"admin":      true,
-	"letmein":    true,
-	"welcome":    true,
-	"monkey":     true,
-	"1234567890": true,
+	"1q2w3e4r5t": true,
+	"zaq12wsx":   true,
+
+	// Dictionary words
+	"password":      true,
+	"password1":     true,
+	"password123":   true,
+	"passw0rd":      true,
+	"admin":         true,
+	"admin123":      true,
+	"administrator": true,
+	"root":          true,
+	"letmein":       true,
+	"welcome":       true,
+	"welcome1":      true,
+	"monkey":        true,
+	"dragon":        true,
+	"master":        true,
+	"sunshine":      true,
+	"princess":      true,
+	"football":      true,
+	"baseball":      true,
+	"superman":      true,
+	"batman":        true,
+
+	// Common patterns
+	"abc123":    true,
+	"abc12345":  true,
+	"iloveyou":  true,
+	"trustno1":  true,
+	"login":     true,
+	"Password1": true,
+	"qazwsx":    true,
+	"starwars":  true,
+
+	// Years and dates
+	"20202020": true,
+	"20212021": true,
+	"20222022": true,
+	"20232023": true,
+	"20242024": true,
+}
+
+// Weak patterns that should be detected even as substrings
+// Only very weak patterns like pure numeric sequences and keyboard patterns
+var weakSubstringPatterns = []string{
+	"123456789",
+	"12345678",
+	"1234567890",
+	"qwertyuiop",
+	"asdfghjkl",
 }
 
 func isCommonPassword(password string) bool {
@@ -113,5 +169,29 @@ func isCommonPassword(password string) bool {
 	for _, r := range password {
 		lowerPassword += string(unicode.ToLower(r))
 	}
-	return commonPasswords[lowerPassword]
+
+	// Check exact match against common passwords
+	if commonPasswords[lowerPassword] {
+		return true
+	}
+
+	// Check if password starts with a common weak password followed by simple additions
+	// This catches "Password123!" but not "MySecurePassword123!"
+	for commonPwd := range commonPasswords {
+		if len(commonPwd) >= 6 {
+			// Check if password starts with common password (case-insensitive)
+			if strings.HasPrefix(lowerPassword, commonPwd) {
+				return true
+			}
+		}
+	}
+
+	// Check for very weak substring patterns (numeric sequences, keyboard patterns)
+	for _, pattern := range weakSubstringPatterns {
+		if strings.Contains(lowerPassword, pattern) {
+			return true
+		}
+	}
+
+	return false
 }

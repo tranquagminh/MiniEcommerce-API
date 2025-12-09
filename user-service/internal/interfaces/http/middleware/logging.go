@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 )
 
@@ -88,7 +89,7 @@ func RequestIDMiddleware(logger *zerolog.Logger) func(http.Handler) http.Handler
 	}
 }
 
-// Simple request ID generator (replace with UUID in production)
+// generateRequestID creates a unique request ID using UUID v4
 func generateRequestID() string {
-	return time.Now().Format("20060102150405")
+	return uuid.New().String()
 }

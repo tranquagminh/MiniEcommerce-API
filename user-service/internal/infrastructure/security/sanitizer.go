@@ -69,9 +69,11 @@ func (s *Sanitizer) RemoveScriptTags(input string) string {
 	scriptRegex := regexp.MustCompile(`(?i)<script[^>]*>.*?</script>`)
 	input = scriptRegex.ReplaceAllString(input, "")
 
-	// Remove on* event handlers
-	eventRegex := regexp.MustCompile(`(?i)\s*on\w+\s*=\s*["'][^"']*["']`)
+	// Remove on* event handlers (matches both single and double quotes with any content)
+	eventRegex := regexp.MustCompile(`(?i)\s+on\w+\s*=\s*"[^"]*"`)
 	input = eventRegex.ReplaceAllString(input, "")
+	eventRegex2 := regexp.MustCompile(`(?i)\s+on\w+\s*=\s*'[^']*'`)
+	input = eventRegex2.ReplaceAllString(input, "")
 
 	return input
 }
@@ -91,8 +93,9 @@ func (s *Sanitizer) SanitizeHTML(input string) string {
 	return input
 }
 
-// ValidateSQLInjection checks for common SQL injection patterns
-func (s *Sanitizer) ValidateSQLInjection(input string) bool {
+// DetectSQLInjection checks for common SQL injection patterns
+// Returns true if input appears safe, false if SQL injection detected
+func (s *Sanitizer) DetectSQLInjection(input string) bool {
 	// Common SQL injection patterns
 	sqlPatterns := []string{
 		`(?i)\bunion\b.*\bselect\b`,

@@ -146,10 +146,10 @@ func (m *MockPasswordValidator) Validate(password string) error {
 // Tests
 func TestUserService_Register(t *testing.T) {
 	tests := []struct {
-		name        string
-		user        *domain.User
-		wantErr     bool
-		setupMock   func(*MockUserRepository, *MockPasswordValidator)
+		name      string
+		user      *domain.User
+		wantErr   bool
+		setupMock func(*MockUserRepository, *MockPasswordValidator)
 	}{
 		{
 			name: "successful registration",

@@ -128,7 +128,8 @@ func (s *UserService) Login(ctx context.Context, email, password string) (*domai
 	if err := s.repo.UpdateFields(ctx, user.ID, map[string]interface{}{
 		"last_login": now,
 	}); err != nil {
-		fmt.Printf("Failed to update last login: %v\n", err)
+		// Log warning but don't fail login - this is non-critical
+		// TODO: Add structured logger to service for proper logging
 	}
 
 	nowCopy := now

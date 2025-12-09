@@ -258,13 +258,15 @@ func (h *UserHandler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 		user.Gender = h.sanitizer.SanitizeString(updateReq.Gender)
 	}
 	if updateReq.Birthday != "" {
-		// Parse birthday string to time.Time
+		// Parse birthday string to time.Time in UTC
 		birthday, err := time.Parse("2006-01-02", updateReq.Birthday)
 		if err != nil {
 			http.Error(w, "Invalid birthday format. Use YYYY-MM-DD", http.StatusBadRequest)
 			return
 		}
-		user.Birthday = &birthday
+		// Ensure birthday is in UTC and set to start of day
+		birthdayUTC := time.Date(birthday.Year(), birthday.Month(), birthday.Day(), 0, 0, 0, 0, time.UTC)
+		user.Birthday = &birthdayUTC
 	}
 
 	// Save updates
@@ -359,66 +361,6 @@ func (h *UserHandler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"message": "Password changed successfully",
-	})
-}
-
-func (h *UserHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPut {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	userID := middleware.GetUserID(r)
-	if userID == 0 {
-		http.Error(w, "User not found in context", http.StatusUnauthorized)
-		return
-	}
-
-	var updateReq struct {
-		FirstName string `json:"first_name"`
-		LastName  string `json:"last_name"`
-		Username  string `json:"username"`
-		
-	}
-
-	if err := json.NewDecoder(r.Body).Decode(&updateReq); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	ctx := r.Context()
-
-	// Get current user
-	user, err := h.service.GetUser(ctx, uint(userID))
-	if err != nil {
-		http.Error(w, "User not found", http.StatusNotFound)
-		return
-	}
-
-	// Update fields with sanitization
-	if updateReq.FirstName != "" {
-		user.FirstName = h.sanitizer.SanitizeString(updateReq.FirstName)
-	}
-	if updateReq.LastName != "" {
-		user.LastName = h.sanitizer.SanitizeString(updateReq.LastName)
-	}
-	if updateReq.Username != "" {
-		user.Username = h.sanitizer.SanitizeUsername(updateReq.Username)
-	}
-
-	// Save updates
-	if err := h.service.UpdateUser(ctx, user); err != nil {
-		http.Error(w, "Failed to update user", http.StatusInternalServerError)
-		return
-	}
-
-	// Return updated user (without password)
-	user.Password = ""
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"message": "User updated successfully",
-		"user":    user,
 	})
 }
 

@@ -209,7 +209,7 @@ func TestSanitizer_RemoveScriptTags(t *testing.T) {
 	}
 }
 
-func TestSanitizer_ValidateSQLInjection(t *testing.T) {
+func TestSanitizer_DetectSQLInjection(t *testing.T) {
 	sanitizer := NewSanitizer()
 
 	tests := []struct {
@@ -251,8 +251,8 @@ func TestSanitizer_ValidateSQLInjection(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := sanitizer.ValidateSQLInjection(tt.input); got != tt.want {
-				t.Errorf("ValidateSQLInjection() = %v, want %v", got, tt.want)
+			if got := sanitizer.DetectSQLInjection(tt.input); got != tt.want {
+				t.Errorf("DetectSQLInjection() = %v, want %v", got, tt.want)
 			}
 		})
 	}

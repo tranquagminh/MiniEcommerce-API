@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -27,5 +28,14 @@ func (u *User) IsDeleted() bool {
 }
 
 func (u *User) FullName() string {
-	return u.FirstName + " " + u.LastName
+	if u.FirstName == "" && u.LastName == "" {
+		return ""
+	}
+	if u.FirstName == "" {
+		return strings.TrimSpace(u.LastName)
+	}
+	if u.LastName == "" {
+		return strings.TrimSpace(u.FirstName)
+	}
+	return strings.TrimSpace(u.FirstName + " " + u.LastName)
 }
