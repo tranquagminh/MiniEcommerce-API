@@ -9,6 +9,7 @@ import (
 	"user-service/internal/application"
 	"user-service/internal/domain"
 	"user-service/internal/infrastructure/auth"
+	"user-service/internal/infrastructure/security"
 	"user-service/internal/interfaces/http/middleware"
 
 	"github.com/go-playground/validator/v10"
@@ -48,10 +49,15 @@ type ChangePasswordRequest struct {
 type UserHandler struct {
 	service    *application.UserService
 	jwtManager *auth.JWTManager
+	sanitizer  *security.Sanitizer
 }
 
 func NewUserHandler(s *application.UserService, jwt *auth.JWTManager) *UserHandler {
-	return &UserHandler{service: s, jwtManager: jwt}
+	return &UserHandler{
+		service:    s,
+		jwtManager: jwt,
+		sanitizer:  security.NewSanitizer(),
+	}
 }
 
 func (h *UserHandler) Register(w http.ResponseWriter, r *http.Request) {
@@ -90,9 +96,13 @@ func (h *UserHandler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Sanitize inputs
+	sanitizedUsername := h.sanitizer.SanitizeUsername(req.Username)
+	sanitizedEmail := h.sanitizer.SanitizeEmail(req.Email)
+
 	u := domain.User{
-		Username: strings.TrimSpace(req.Username),
-		Email:    strings.ToLower(strings.TrimSpace(req.Email)),
+		Username: sanitizedUsername,
+		Email:    sanitizedEmail,
 		Password: req.Password,
 	}
 
@@ -105,6 +115,9 @@ func (h *UserHandler) Register(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Could not register user", http.StatusInternalServerError)
 		return
 	}
+
+	// Record metrics
+	middleware.RecordUserRegistration()
 
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -136,6 +149,7 @@ func (h *UserHandler) Login(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	user, err := h.service.Login(ctx, req.Email, req.Password)
 	if err != nil {
+		middleware.RecordFailedLogin()
 		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
 		return
 	}
@@ -145,6 +159,9 @@ func (h *UserHandler) Login(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Could not generate token", http.StatusInternalServerError)
 		return
 	}
+
+	// Record successful login
+	middleware.RecordUserLogin()
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -224,21 +241,21 @@ func (h *UserHandler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Update fields
+	// Update fields with sanitization
 	if updateReq.FirstName != "" {
-		user.FirstName = updateReq.FirstName
+		user.FirstName = h.sanitizer.SanitizeString(updateReq.FirstName)
 	}
 	if updateReq.LastName != "" {
-		user.LastName = updateReq.LastName
+		user.LastName = h.sanitizer.SanitizeString(updateReq.LastName)
 	}
 	if updateReq.Username != "" {
-		user.Username = updateReq.Username
+		user.Username = h.sanitizer.SanitizeUsername(updateReq.Username)
 	}
 	if updateReq.Phone != "" {
-		user.Phone = updateReq.Phone
+		user.Phone = h.sanitizer.SanitizePhone(updateReq.Phone)
 	}
 	if updateReq.Gender != "" {
-		user.Gender = updateReq.Gender
+		user.Gender = h.sanitizer.SanitizeString(updateReq.Gender)
 	}
 	if updateReq.Birthday != "" {
 		// Parse birthday string to time.Time
@@ -336,6 +353,9 @@ func (h *UserHandler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Record password change
+	middleware.RecordPasswordChange()
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"message": "Password changed successfully",
@@ -375,15 +395,15 @@ func (h *UserHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Update fields
+	// Update fields with sanitization
 	if updateReq.FirstName != "" {
-		user.FirstName = updateReq.FirstName
+		user.FirstName = h.sanitizer.SanitizeString(updateReq.FirstName)
 	}
 	if updateReq.LastName != "" {
-		user.LastName = updateReq.LastName
+		user.LastName = h.sanitizer.SanitizeString(updateReq.LastName)
 	}
 	if updateReq.Username != "" {
-		user.Username = updateReq.Username
+		user.Username = h.sanitizer.SanitizeUsername(updateReq.Username)
 	}
 
 	// Save updates

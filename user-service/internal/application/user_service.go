@@ -36,17 +36,23 @@ type TransactionManager interface {
 	ExecuteInTx(ctx context.Context, fn func(tx *gorm.DB) error) error
 }
 
-type UserService struct {
-	repo      UserRepository
-	txManager TransactionManager
-	cache     UserCache
+type PasswordValidator interface {
+	Validate(password string) error
 }
 
-func NewUserService(repo UserRepository, txManager TransactionManager, cache UserCache) *UserService {
+type UserService struct {
+	repo              UserRepository
+	txManager         TransactionManager
+	cache             UserCache
+	passwordValidator PasswordValidator
+}
+
+func NewUserService(repo UserRepository, txManager TransactionManager, cache UserCache, passwordValidator PasswordValidator) *UserService {
 	return &UserService{
-		repo:      repo,
-		txManager: txManager,
-		cache:     cache,
+		repo:              repo,
+		txManager:         txManager,
+		cache:             cache,
+		passwordValidator: passwordValidator,
 	}
 }
 
@@ -58,6 +64,13 @@ func (s *UserService) Register(ctx context.Context, user *domain.User) error {
 
 	if password == "" {
 		return fmt.Errorf("password is required")
+	}
+
+	// Validate password strength
+	if s.passwordValidator != nil {
+		if err := s.passwordValidator.Validate(password); err != nil {
+			return err
+		}
 	}
 
 	// Check if email exists
@@ -148,7 +161,25 @@ func (s *UserService) GetUser(ctx context.Context, id uint) (*domain.User, error
 }
 
 func (s *UserService) UpdateUser(ctx context.Context, user *domain.User) error {
-	err := s.repo.Update(ctx, user)
+	// Get existing user to compare email changes
+	existing, err := s.repo.GetByID(ctx, user.ID)
+	if err != nil {
+		return fmt.Errorf("user not found: %w", err)
+	}
+
+	// If email is being changed, check uniqueness
+	if user.Email != "" && user.Email != existing.Email {
+		user.Email = strings.ToLower(strings.TrimSpace(user.Email))
+		exists, err := s.repo.ExistsEmail(ctx, user.Email)
+		if err != nil {
+			return fmt.Errorf("failed to check email: %w", err)
+		}
+		if exists {
+			return fmt.Errorf("email already in use")
+		}
+	}
+
+	err = s.repo.Update(ctx, user)
 	if err != nil {
 		return err
 	}
@@ -157,6 +188,10 @@ func (s *UserService) UpdateUser(ctx context.Context, user *domain.User) error {
 	if s.cache != nil {
 		_ = s.cache.Delete(ctx, user.ID)
 		_ = s.cache.DeleteByEmail(ctx, user.Email)
+		// Also delete old email from cache
+		if user.Email != existing.Email {
+			_ = s.cache.DeleteByEmail(ctx, existing.Email)
+		}
 	}
 
 	return nil

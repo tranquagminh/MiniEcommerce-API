@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -13,6 +12,7 @@ import (
 	"user-service/internal/application"
 	"user-service/internal/config"
 	"user-service/internal/infrastructure/auth"
+	"user-service/internal/infrastructure/logger"
 	"user-service/internal/infrastructure/postgres"
 	"user-service/internal/infrastructure/redis"
 	userhttp "user-service/internal/interfaces/http/handlers"
@@ -25,6 +25,14 @@ import (
 func main() {
 	// Load config
 	cfg := config.Load()
+
+	// Initialize logger
+	environment := getEnv("ENVIRONMENT", "development")
+	log := logger.New("user-service", environment)
+
+	// Initialize Prometheus metrics
+	middleware.InitMetrics()
+	log.Info().Msg("Prometheus metrics initialized")
 
 	// Setup database connection with advanced config
 	dbConfig := &postgres.DBConfig{
@@ -45,13 +53,13 @@ func main() {
 	// Connect to database
 	db, err := postgres.NewConnection(dbConfig)
 	if err != nil {
-		log.Fatal("Failed to connect to database:", err)
+		log.Fatal().Err(err).Msg("Failed to connect to database")
 	}
 
 	// Get underlying SQL database to ensure closure
 	sqlDB, err := db.DB()
 	if err != nil {
-		log.Fatal("Failed to get sql.DB:", err)
+		log.Fatal().Err(err).Msg("Failed to get sql.DB")
 	}
 	defer sqlDB.Close()
 
@@ -59,19 +67,26 @@ func main() {
 	var redisClient *redis.RedisClient
 	redisClient, err = redis.NewRedisClient(cfg.RedisAddr, cfg.RedisPassword, cfg.RedisDB)
 	if err != nil {
-		log.Printf("WARNING: Failed to connect to Redis: %v", err)
-		log.Printf("Continuing without Redis - using in-memory cache and rate limiting")
+		log.Warn().Err(err).Msg("Failed to connect to Redis")
+		log.Info().Msg("Continuing without Redis - using in-memory cache and rate limiting")
 		redisClient = nil
 	} else {
 		defer redisClient.Close()
-		log.Println("Redis connected successfully")
+		log.Info().Msg("Redis connected successfully")
 	}
 
-	// Auto migrate
-	if err := db.AutoMigrate(&postgres.UserModel{}); err != nil {
-		log.Fatal("Failed to migrate database:", err)
+	// Run database migrations
+	migrationsPath := getEnv("MIGRATIONS_PATH", "./migrations")
+	if err := postgres.RunMigrations(sqlDB, migrationsPath); err != nil {
+		log.Fatal().Err(err).Msg("Failed to run database migrations")
 	}
-	log.Print("Database migrated successfully")
+	log.Info().Msg("Database migrations completed successfully")
+
+	// Log current migration version
+	version, dirty, err := postgres.GetMigrationVersion(sqlDB, migrationsPath)
+	if err == nil {
+		log.Info().Uint("version", version).Bool("dirty", dirty).Msg("Current migration version")
+	}
 
 	// Initialize cache
 	var userCache application.UserCache
@@ -82,7 +97,8 @@ func main() {
 	// Initialize repositories and services
 	userRepo := postgres.NewUserRepository(db)
 	txManager := postgres.NewTransactionManager(db)
-	userService := application.NewUserService(userRepo, txManager, userCache)
+	passwordValidator := auth.DefaultPasswordValidator()
+	userService := application.NewUserService(userRepo, txManager, userCache, passwordValidator)
 
 	// Initialize JWT manager
 	jwtManager := auth.NewJWTManager(cfg.JWTSecret, cfg.JWTExpire)
@@ -105,7 +121,7 @@ func main() {
 			time.Minute,
 		)
 		handler = middleware.RedisRateLimitMiddleware(globalRateLimiter)(handler)
-		log.Println("Using Redis-based rate limiting")
+		log.Info().Msg("Using Redis-based rate limiting")
 	} else {
 		// Fallback to in-memory rate limiting
 		globalRateLimiter := middleware.NewRateLimiter(
@@ -114,8 +130,17 @@ func main() {
 			30*time.Minute,
 		)
 		handler = middleware.RateLimitMiddleware(globalRateLimiter)(handler)
-		log.Println("Using in-memory rate limiting")
+		log.Info().Msg("Using in-memory rate limiting")
 	}
+
+	// Apply Prometheus metrics middleware
+	handler = middleware.PrometheusMiddleware(handler)
+
+	// Apply logging middleware
+	handler = middleware.LoggingMiddleware(log.GetZerolog())(handler)
+
+	// Apply security headers
+	handler = middleware.SecurityHeaders(handler)
 
 	// Apply CORS
 	handler = middleware.CORS(handler)
@@ -131,15 +156,16 @@ func main() {
 
 	// Start server in goroutine
 	go func() {
-		log.Printf("Server starting on port %s", srv.Addr)
-		log.Printf("Environment: %s", getEnv("ENVIRONMENT", "development"))
-		log.Printf("Features enabled:")
-		log.Printf("  - Database: PostgreSQL")
-		log.Printf("  - Cache: %v", redisClient != nil)
-		log.Printf("  - Rate Limiting: %v (Redis: %v)", true, redisClient != nil)
+		log.Info().
+			Str("address", srv.Addr).
+			Str("environment", environment).
+			Bool("database_enabled", true).
+			Bool("cache_enabled", redisClient != nil).
+			Bool("redis_rate_limiting", redisClient != nil).
+			Msg("Server starting")
 
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Failed to start server: %v", err)
+			log.Fatal().Err(err).Msg("Failed to start server")
 		}
 	}()
 
@@ -148,17 +174,17 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	log.Println("Shutting down server...")
+	log.Info().Msg("Shutting down server...")
 
 	// Graceful shutdown with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	if err := srv.Shutdown(ctx); err != nil {
-		log.Fatal("Server forced to shutdown:", err)
+		log.Fatal().Err(err).Msg("Server forced to shutdown")
 	}
 
-	log.Println("Server exited")
+	log.Info().Msg("Server exited gracefully")
 }
 
 func setupRoutes(
@@ -166,96 +192,76 @@ func setupRoutes(
 	jwtManager *auth.JWTManager,
 	db *gorm.DB,
 	redisClient *redis.RedisClient,
-	cfg *config.Config,
+	_ *config.Config,
 ) *http.ServeMux {
 	mux := http.NewServeMux()
 
-	// Health check
+	// Health check (non-versioned)
 	mux.HandleFunc("/health", healthCheck(db, redisClient))
 
-	// Public routes
+	// Prometheus metrics endpoint (non-versioned)
+	mux.Handle("/metrics", middleware.MetricsHandler())
+
+	// API v1 routes
+	// Public routes - Register
 	if redisClient != nil {
-		mux.Handle("/users/register",
+		mux.Handle("/api/v1/auth/register",
 			middleware.CustomRedisRateLimitMiddleware(redisClient, 5, time.Minute)(
 				http.HandlerFunc(handler.Register),
 			),
 		)
 
-		mux.Handle("/users/login",
+		mux.Handle("/api/v1/auth/login",
 			middleware.CustomRedisRateLimitMiddleware(redisClient, 10, time.Minute)(
 				http.HandlerFunc(handler.Login),
 			),
 		)
 	} else {
-		mux.Handle("/users/register",
+		mux.Handle("/api/v1/auth/register",
 			middleware.CustomRateLimitMiddleware(0.083, 1)(
 				http.HandlerFunc(handler.Register),
 			),
 		)
 
-		mux.Handle("/users/login",
+		mux.Handle("/api/v1/auth/login",
 			middleware.CustomRateLimitMiddleware(0.167, 2)(
 				http.HandlerFunc(handler.Login),
 			),
 		)
 	}
 
-	// Protected routes
-	mux.Handle("/users/me",
+	// Protected routes - User profile
+	mux.Handle("/api/v1/users/me",
 		middleware.AuthMiddleware(jwtManager)(
 			http.HandlerFunc(handler.GetCurrentUser),
 		),
 	)
 
-	// NEW: Update Profile ✅
+	// Update Profile with rate limiting
 	if redisClient != nil {
-		mux.Handle("/users/profile",
+		mux.Handle("/api/v1/users/profile",
 			middleware.AuthMiddleware(jwtManager)(
 				middleware.RedisUserRateLimitMiddleware(redisClient, 10, time.Minute)(
 					http.HandlerFunc(handler.UpdateProfile),
 				),
 			),
 		)
-	} else {
-		mux.Handle("/users/profile",
-			middleware.AuthMiddleware(jwtManager)(
-				middleware.UserRateLimitMiddleware(2, 5)(
-					http.HandlerFunc(handler.UpdateProfile),
-				),
-			),
-		)
-	}
 
-	// NEW: Change Password ✅
-	if redisClient != nil {
-		mux.Handle("/users/change-password",
+		mux.Handle("/api/v1/users/change-password",
 			middleware.AuthMiddleware(jwtManager)(
 				middleware.RedisUserRateLimitMiddleware(redisClient, 5, time.Minute)(
 					http.HandlerFunc(handler.ChangePassword),
 				),
 			),
 		)
-	} else {
-		mux.Handle("/users/change-password",
-			middleware.AuthMiddleware(jwtManager)(
-				middleware.UserRateLimitMiddleware(1, 2)(
-					http.HandlerFunc(handler.ChangePassword),
-				),
-			),
-		)
-	}
 
-	// Keep old /users/update for backward compatibility
-	if redisClient != nil {
-		mux.Handle("/users/update",
+		mux.Handle("/api/v1/users",
 			middleware.AuthMiddleware(jwtManager)(
-				middleware.RedisUserRateLimitMiddleware(redisClient, 10, time.Minute)(
-					http.HandlerFunc(handler.UpdateUser),
-				),
+				http.HandlerFunc(handler.ListUsers),
 			),
 		)
 
-		mux.Handle("/users/delete",
+		mux.Handle("/api/v1/users/delete",
 			middleware.AuthMiddleware(jwtManager)(
 				middleware.RedisUserRateLimitMiddleware(redisClient, 5, time.Minute)(
 					http.HandlerFunc(handler.DeleteUser),
@@ -263,15 +269,29 @@ func setupRoutes(
 			),
 		)
 	} else {
-		mux.Handle("/users/update",
+		mux.Handle("/api/v1/users/profile",
 			middleware.AuthMiddleware(jwtManager)(
 				middleware.UserRateLimitMiddleware(2, 5)(
-					http.HandlerFunc(handler.UpdateUser),
+					http.HandlerFunc(handler.UpdateProfile),
 				),
 			),
 		)
 
-		mux.Handle("/users/delete",
+		mux.Handle("/api/v1/users/change-password",
+			middleware.AuthMiddleware(jwtManager)(
+				middleware.UserRateLimitMiddleware(1, 2)(
+					http.HandlerFunc(handler.ChangePassword),
+				),
+			),
+		)
+
+		mux.Handle("/api/v1/users",
+			middleware.AuthMiddleware(jwtManager)(
+				http.HandlerFunc(handler.ListUsers),
+			),
+		)
+
+		mux.Handle("/api/v1/users/delete",
 			middleware.AuthMiddleware(jwtManager)(
 				middleware.UserRateLimitMiddleware(1, 2)(
 					http.HandlerFunc(handler.DeleteUser),
@@ -279,13 +299,6 @@ func setupRoutes(
 			),
 		)
 	}
-
-	// List users
-	mux.Handle("/users",
-		middleware.AuthMiddleware(jwtManager)(
-			http.HandlerFunc(handler.ListUsers),
-		),
-	)
 
 	return mux
 }
