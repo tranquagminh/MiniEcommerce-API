@@ -70,7 +70,10 @@ jobs:
         with:
           version: v1.57.0
           working-directory: user-service
-          args: --timeout=5m
+          args: --timeout=5m --path-prefix=user-service
+          skip-cache: true
+          skip-pkg-cache: true
+          skip-build-cache: true
 
       - name: Run tests
         working-directory: ./user-service
