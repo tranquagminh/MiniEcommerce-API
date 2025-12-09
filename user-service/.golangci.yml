@@ -20,8 +20,7 @@ linters:
     - noctx
     - sqlclosecheck
     - rowserrcheck
-  disable:
-    - typecheck  # Disable typecheck due to Go version sensitivity
+  # Note: typecheck is not enabled to avoid Go version compatibility issues
 
 linters-settings:
   errcheck:
