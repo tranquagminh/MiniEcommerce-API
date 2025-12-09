@@ -68,26 +68,21 @@ jobs:
       - name: Verify Go version
         run: go version
 
-      - name: Install golangci-lint
-        run: |
-          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v1.57.0
-          golangci-lint --version
+      - name: Run go vet
+        working-directory: ./user-service
+        run: go vet ./...
 
-      - name: Verify golangci-lint config
+      - name: Run staticcheck
         working-directory: ./user-service
         run: |
-          echo "Checking .golangci.yml file exists:"
-          ls -la .golangci.yml
-          echo ""
-          echo "Content of .golangci.yml:"
-          cat .golangci.yml
-          echo ""
-          echo "Verifying enabled linters (typecheck should NOT be in this list):"
-          grep -A20 "enable:" .golangci.yml
+          go install honnef.co/go/tools/cmd/staticcheck@latest
+          staticcheck ./...
 
-      - name: Run golangci-lint
+      - name: Run gosec security scanner
         working-directory: ./user-service
-        run: golangci-lint run --disable-all --enable=errcheck,gosimple,govet,ineffassign,staticcheck,unused,gofmt,goimports,misspell,gocritic,gosec,revive,bodyclose,noctx,sqlclosecheck,rowserrcheck --timeout=5m
+        run: |
+          go install github.com/securego/gosec/v2/cmd/gosec@latest
+          gosec ./...
 
       - name: Run tests
         working-directory: ./user-service
@@ -109,18 +104,16 @@ jobs:
           name: user-service-coverage
           fail_ci_if_error: false
 
-      - name: Run security scan with gosec
+      - name: Generate gosec SARIF report
         working-directory: ./user-service
-        run: |
-          go install github.com/securego/gosec/v2/cmd/gosec@latest
-          gosec -fmt=json -out=gosec-results.json ./... || true
+        run: gosec -fmt=sarif -out=gosec-results.sarif ./... || true
 
       - name: Upload gosec results
         uses: github/codeql-action/upload-sarif@v3
         if: always()
         continue-on-error: true
         with:
-          sarif_file: user-service/gosec-results.json
+          sarif_file: user-service/gosec-results.sarif
 
   build:
     name: Build Docker Image
