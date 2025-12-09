@@ -48,7 +48,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.21'
+          go-version: '1.25.1'
           cache-dependency-path: user-service/go.sum
 
       - name: Cache Go modules
@@ -68,7 +68,7 @@ jobs:
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v4
         with:
-          version: v1.55.2
+          version: v1.57.0
           working-directory: user-service
           args: --timeout=5m
 
