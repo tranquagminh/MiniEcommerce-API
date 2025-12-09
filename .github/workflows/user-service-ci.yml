@@ -73,9 +73,18 @@ jobs:
           curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v1.57.0
           golangci-lint --version
 
+      - name: Verify golangci-lint config
+        working-directory: ./user-service
+        run: |
+          echo "Checking .golangci.yml file:"
+          cat .golangci.yml
+          echo "---"
+          echo "Verifying typecheck is disabled:"
+          grep -A2 "disable:" .golangci.yml || echo "No disable section found"
+
       - name: Run golangci-lint
         working-directory: ./user-service
-        run: golangci-lint run --timeout=5m --out-format=github-actions --path-prefix=user-service
+        run: golangci-lint run --config=.golangci.yml --timeout=5m --out-format=github-actions --path-prefix=user-service
 
       - name: Run tests
         working-directory: ./user-service
