@@ -82,8 +82,8 @@ jobs:
           echo "Content of .golangci.yml:"
           cat .golangci.yml
           echo ""
-          echo "Verifying typecheck is disabled:"
-          grep -A2 "disable:" .golangci.yml
+          echo "Verifying enabled linters (typecheck should NOT be in this list):"
+          grep -A20 "enable:" .golangci.yml
 
       - name: Run golangci-lint
         working-directory: ./user-service
