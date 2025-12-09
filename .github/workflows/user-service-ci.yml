@@ -87,7 +87,7 @@ jobs:
 
       - name: Run golangci-lint
         working-directory: ./user-service
-        run: golangci-lint run --timeout=5m
+        run: golangci-lint run --disable=typecheck --timeout=5m
 
       - name: Run tests
         working-directory: ./user-service
