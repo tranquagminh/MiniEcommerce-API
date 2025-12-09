@@ -87,7 +87,7 @@ jobs:
 
       - name: Run golangci-lint
         working-directory: ./user-service
-        run: golangci-lint run --disable=typecheck --timeout=5m
+        run: golangci-lint run --disable-all --enable=errcheck,gosimple,govet,ineffassign,staticcheck,unused,gofmt,goimports,misspell,gocritic,gosec,revive,bodyclose,noctx,sqlclosecheck,rowserrcheck --timeout=5m
 
       - name: Run tests
         working-directory: ./user-service
