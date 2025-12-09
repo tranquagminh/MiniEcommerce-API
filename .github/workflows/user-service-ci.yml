@@ -76,15 +76,18 @@ jobs:
       - name: Verify golangci-lint config
         working-directory: ./user-service
         run: |
-          echo "Checking .golangci.yml file:"
+          echo "Checking .golangci.yml file exists:"
+          ls -la .golangci.yml
+          echo ""
+          echo "Content of .golangci.yml:"
           cat .golangci.yml
-          echo "---"
+          echo ""
           echo "Verifying typecheck is disabled:"
-          grep -A2 "disable:" .golangci.yml || echo "No disable section found"
+          grep -A2 "disable:" .golangci.yml
 
       - name: Run golangci-lint
         working-directory: ./user-service
-        run: golangci-lint run --config=.golangci.yml --timeout=5m --out-format=github-actions --path-prefix=user-service
+        run: golangci-lint run --timeout=5m
 
       - name: Run tests
         working-directory: ./user-service
