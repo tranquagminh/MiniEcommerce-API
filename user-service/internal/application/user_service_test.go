@@ -305,6 +305,7 @@ func TestUserService_GetUser(t *testing.T) {
 		}
 		if user == nil {
 			t.Errorf("GetUser() should return user")
+			return
 		}
 		if user.Email != testUser.Email {
 			t.Errorf("GetUser() email = %v, want %v", user.Email, testUser.Email)
