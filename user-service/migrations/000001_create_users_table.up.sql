@@ -14,12 +14,12 @@ CREATE TABLE IF NOT EXISTS users (
     deleted_at TIMESTAMP
 );
 
--- Create indexes for better query performance
-CREATE INDEX idx_users_email ON users(email);
-CREATE INDEX idx_users_username ON users(username);
-CREATE INDEX idx_users_deleted_at ON users(deleted_at);
-CREATE INDEX idx_users_created_at ON users(created_at DESC);
-CREATE INDEX idx_users_last_login ON users(last_login DESC);
+-- Create indexes for better query performance (idempotent)
+CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+CREATE INDEX IF NOT EXISTS idx_users_deleted_at ON users(deleted_at);
+CREATE INDEX IF NOT EXISTS idx_users_created_at ON users(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_users_last_login ON users(last_login DESC);
 
 -- Create trigger to automatically update updated_at
 CREATE OR REPLACE FUNCTION update_updated_at_column()
@@ -30,5 +30,7 @@ BEGIN
 END;
 $$ language 'plpgsql';
 
+-- Drop trigger if exists before creating (idempotent)
+DROP TRIGGER IF EXISTS update_users_updated_at ON users;
 CREATE TRIGGER update_users_updated_at BEFORE UPDATE ON users
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();

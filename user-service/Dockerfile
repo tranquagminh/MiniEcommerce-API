@@ -37,11 +37,11 @@ COPY --from=builder /usr/share/zoneinfo /usr/share/zoneinfo
 # Copy CA certificates
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 
-# Copy migrations
-COPY --from=builder /app/migrations /migrations
+# Copy migrations with proper permissions
+COPY --from=builder --chown=nonroot:nonroot /app/migrations /migrations
 
-# Copy binary
-COPY --from=builder /app/user-service /user-service
+# Copy binary with proper permissions
+COPY --from=builder --chown=nonroot:nonroot /app/user-service /user-service
 
 # Use non-root user (defined in distroless:nonroot)
 USER nonroot:nonroot

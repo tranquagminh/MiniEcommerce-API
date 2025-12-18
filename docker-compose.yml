@@ -20,14 +20,25 @@ services:
       PGADMIN_DEFAULT_PASSWORD: admin
     ports:
       - "8080:80"
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    command: redis-server --appendonly yes
+
   user-service:
     build: ./user-service
     container_name: user-service
     depends_on:
       - postgres
+      - redis
     ports:
       - "8081:8081"
-    environment: 
+    environment:
       DB_HOST: postgres
       DB_PORT: 5432
       DB_USER: admin
@@ -36,6 +47,10 @@ services:
       DB_SSLMODE: disable
       JWT_SECRET: production-secret-key-change-this
       JWT_EXPIRE: 24h
+      REDIS_ADDR: redis:6379
+      REDIS_PASSWORD: ""
+      REDIS_DB: 0
+      ENVIRONMENT: development
   product-service:
     build: ./product-service
     container_name: product-service
@@ -61,3 +76,4 @@ services:
 
 volumes:
   pgdata:
+  redisdata:
