@@ -5,23 +5,53 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"user-service/internal/infrastructure/redis"
 )
 
 type RedisRateLimiter struct {
-	client *redis.RedisClient
-	limit  int
-	window time.Duration
+	client           *redis.RedisClient
+	limit            int
+	window           time.Duration
+	trustProxies     bool
+	trustedProxyNets []*net.IPNet
 }
 
 func NewRedisRateLimiter(client *redis.RedisClient, limit int, window time.Duration) *RedisRateLimiter {
 	return &RedisRateLimiter{
-		client: client,
-		limit:  limit,
-		window: window,
+		client:           client,
+		limit:            limit,
+		window:           window,
+		trustProxies:     false,
+		trustedProxyNets: nil,
+	}
+}
+
+// NewRedisRateLimiterWithProxyConfig creates a Redis rate limiter with proxy configuration
+func NewRedisRateLimiterWithProxyConfig(client *redis.RedisClient, limit int, window time.Duration, trustProxies bool, trustedCIDRs []string) *RedisRateLimiter {
+	var trustedNets []*net.IPNet
+
+	if trustProxies && len(trustedCIDRs) > 0 {
+		for _, cidr := range trustedCIDRs {
+			_, ipNet, err := net.ParseCIDR(cidr)
+			if err != nil {
+				fmt.Printf("Warning: Invalid CIDR %s: %v\n", cidr, err)
+				continue
+			}
+			trustedNets = append(trustedNets, ipNet)
+		}
+	}
+
+	return &RedisRateLimiter{
+		client:           client,
+		limit:            limit,
+		window:           window,
+		trustProxies:     trustProxies,
+		trustedProxyNets: trustedNets,
 	}
 }
 
@@ -54,7 +84,7 @@ func RedisRateLimitMiddleware(rl *RedisRateLimiter) func(http.Handler) http.Hand
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ctx := r.Context()
-			ip := getClientIP(r)
+			ip := rl.getClientIP(r)
 
 			allowed, err := rl.Allow(ctx, ip)
 			if err != nil {
@@ -78,6 +108,63 @@ func RedisRateLimitMiddleware(rl *RedisRateLimiter) func(http.Handler) http.Hand
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// getClientIP extracts the real client IP from the request with security checks
+func (rl *RedisRateLimiter) getClientIP(r *http.Request) string {
+	// Extract the direct connection IP (from RemoteAddr)
+	remoteIP, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		// If parsing fails, use RemoteAddr as-is
+		remoteIP = r.RemoteAddr
+	}
+
+	// Parse the remote IP
+	directIP := net.ParseIP(remoteIP)
+	if directIP == nil {
+		// Invalid IP, return as-is for rate limiting
+		return remoteIP
+	}
+
+	// Only trust proxy headers if explicitly configured AND the request comes from a trusted proxy
+	if rl.trustProxies && rl.isTrustedProxy(directIP) {
+		// Check X-Forwarded-For header
+		xff := r.Header.Get("X-Forwarded-For")
+		if xff != "" {
+			ips := strings.Split(xff, ",")
+			// Take the first IP in the chain (the original client)
+			if len(ips) > 0 {
+				clientIP := strings.TrimSpace(ips[0])
+				// Validate it's a proper IP
+				if net.ParseIP(clientIP) != nil {
+					return clientIP
+				}
+			}
+		}
+
+		// Check X-Real-IP header as fallback
+		xri := r.Header.Get("X-Real-IP")
+		if xri != "" && net.ParseIP(xri) != nil {
+			return xri
+		}
+	}
+
+	// Fall back to direct connection IP (safe default)
+	return remoteIP
+}
+
+// isTrustedProxy checks if the given IP is in the trusted proxy list
+func (rl *RedisRateLimiter) isTrustedProxy(ip net.IP) bool {
+	if len(rl.trustedProxyNets) == 0 {
+		return false
+	}
+
+	for _, ipNet := range rl.trustedProxyNets {
+		if ipNet.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // Custom Redis rate limiter for different endpoints

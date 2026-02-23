@@ -14,11 +14,13 @@ import (
 
 // RateLimiter stores the rate limiters for each visitor
 type RateLimiter struct {
-	visitors map[string]*visitor
-	mu       sync.RWMutex
-	limit    rate.Limit
-	burst    int
-	ttl      time.Duration
+	visitors          map[string]*visitor
+	mu                sync.RWMutex
+	limit             rate.Limit
+	burst             int
+	ttl               time.Duration
+	trustProxies      bool
+	trustedProxyNets  []*net.IPNet
 }
 
 // visitor holds the rate limiter and last seen time for each visitor
@@ -30,10 +32,43 @@ type visitor struct {
 // NewRateLimiter creates a new rate limiter
 func NewRateLimiter(requestsPerSecond float64, burst int, ttl time.Duration) *RateLimiter {
 	rl := &RateLimiter{
-		visitors: make(map[string]*visitor),
-		limit:    rate.Limit(requestsPerSecond),
-		burst:    burst,
-		ttl:      ttl,
+		visitors:         make(map[string]*visitor),
+		limit:            rate.Limit(requestsPerSecond),
+		burst:            burst,
+		ttl:              ttl,
+		trustProxies:     false,
+		trustedProxyNets: nil,
+	}
+
+	// Cleanup goroutine để xóa các visitors cũ
+	go rl.cleanupVisitors()
+
+	return rl
+}
+
+// NewRateLimiterWithProxyConfig creates a new rate limiter with proxy configuration
+func NewRateLimiterWithProxyConfig(requestsPerSecond float64, burst int, ttl time.Duration, trustProxies bool, trustedCIDRs []string) *RateLimiter {
+	var trustedNets []*net.IPNet
+
+	if trustProxies && len(trustedCIDRs) > 0 {
+		for _, cidr := range trustedCIDRs {
+			_, ipNet, err := net.ParseCIDR(cidr)
+			if err != nil {
+				// Log error but continue - invalid CIDR will be skipped
+				fmt.Printf("Warning: Invalid CIDR %s: %v\n", cidr, err)
+				continue
+			}
+			trustedNets = append(trustedNets, ipNet)
+		}
+	}
+
+	rl := &RateLimiter{
+		visitors:         make(map[string]*visitor),
+		limit:            rate.Limit(requestsPerSecond),
+		burst:            burst,
+		ttl:              ttl,
+		trustProxies:     trustProxies,
+		trustedProxyNets: trustedNets,
 	}
 
 	// Cleanup goroutine để xóa các visitors cũ
@@ -92,7 +127,7 @@ func (rl *RateLimiter) cleanupVisitors() {
 func RateLimitMiddleware(limiter *RateLimiter) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ip := getClientIP(r)
+			ip := limiter.getClientIP(r)
 
 			// Get the rate limiter for this IP
 			l := limiter.getVisitor(ip)
@@ -113,7 +148,7 @@ func CustomRateLimitMiddleware(requestsPerSecond float64, burst int) func(http.H
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ip := getClientIP(r)
+			ip := limiter.getClientIP(r)
 			l := limiter.getVisitor(ip)
 
 			if !l.Allow() {
@@ -131,27 +166,61 @@ func CustomRateLimitMiddleware(requestsPerSecond float64, burst int) func(http.H
 	}
 }
 
-// getClientIP extracts the real client IP from the request
-func getClientIP(r *http.Request) string {
-	// Check X-Forwarded-For header
-	xff := r.Header.Get("X-Forwarded-For")
-	if xff != "" {
-		ips := strings.Split(xff, ",")
-		// Take the first IP in the chain
-		if len(ips) > 0 {
-			return strings.TrimSpace(ips[0])
+// getClientIP extracts the real client IP from the request with security checks
+func (rl *RateLimiter) getClientIP(r *http.Request) string {
+	// Extract the direct connection IP (from RemoteAddr)
+	remoteIP, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		// If parsing fails, use RemoteAddr as-is
+		remoteIP = r.RemoteAddr
+	}
+
+	// Parse the remote IP
+	directIP := net.ParseIP(remoteIP)
+	if directIP == nil {
+		// Invalid IP, return as-is for rate limiting
+		return remoteIP
+	}
+
+	// Only trust proxy headers if explicitly configured AND the request comes from a trusted proxy
+	if rl.trustProxies && rl.isTrustedProxy(directIP) {
+		// Check X-Forwarded-For header
+		xff := r.Header.Get("X-Forwarded-For")
+		if xff != "" {
+			ips := strings.Split(xff, ",")
+			// Take the first IP in the chain (the original client)
+			if len(ips) > 0 {
+				clientIP := strings.TrimSpace(ips[0])
+				// Validate it's a proper IP
+				if net.ParseIP(clientIP) != nil {
+					return clientIP
+				}
+			}
+		}
+
+		// Check X-Real-IP header as fallback
+		xri := r.Header.Get("X-Real-IP")
+		if xri != "" && net.ParseIP(xri) != nil {
+			return xri
 		}
 	}
 
-	// Check X-Real-IP header
-	xri := r.Header.Get("X-Real-IP")
-	if xri != "" {
-		return xri
+	// Fall back to direct connection IP (safe default)
+	return remoteIP
+}
+
+// isTrustedProxy checks if the given IP is in the trusted proxy list
+func (rl *RateLimiter) isTrustedProxy(ip net.IP) bool {
+	if len(rl.trustedProxyNets) == 0 {
+		return false
 	}
 
-	// Fall back to RemoteAddr
-	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
-	return ip
+	for _, ipNet := range rl.trustedProxyNets {
+		if ipNet.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // rateLimitExceededResponse sends a 429 Too Many Requests response

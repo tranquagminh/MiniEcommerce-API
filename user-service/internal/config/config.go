@@ -4,6 +4,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -42,6 +43,10 @@ type Config struct {
 	RateLimitLoginBurst    int
 	RateLimitRegister      float64
 	RateLimitRegisterBurst int
+
+	// Trusted proxy configuration for X-Forwarded-For
+	TrustProxies      bool
+	TrustedProxyCIDRs []string
 }
 
 func Load() *Config {
@@ -94,6 +99,10 @@ func Load() *Config {
 	rateLimitRegister := getEnvAsFloat("RATE_LIMIT_REGISTER", 0.083) // 5/min
 	rateLimitRegisterBurst := getEnvAsInt("RATE_LIMIT_REGISTER_BURST", 1)
 
+	// Trusted proxy configuration
+	trustProxies := getEnvAsBool("TRUST_PROXIES", false)
+	trustedProxyCIDRs := getEnvAsSlice("TRUSTED_PROXY_CIDRS", []string{})
+
 	return &Config{
 		Port:                   port,
 		JWTSecret:              jwtSecret,
@@ -120,6 +129,8 @@ func Load() *Config {
 		RateLimitLoginBurst:    rateLimitLoginBurst,
 		RateLimitRegister:      rateLimitRegister,
 		RateLimitRegisterBurst: rateLimitRegisterBurst,
+		TrustProxies:           trustProxies,
+		TrustedProxyCIDRs:      trustedProxyCIDRs,
 	}
 }
 
@@ -144,4 +155,28 @@ func getEnvAsFloat(key string, fallback float64) float64 {
 		return value
 	}
 	return fallback
+}
+
+func getEnvAsBool(key string, fallback bool) bool {
+	valueStr := getEnv(key, "")
+	if value, err := strconv.ParseBool(valueStr); err == nil {
+		return value
+	}
+	return fallback
+}
+
+func getEnvAsSlice(key string, fallback []string) []string {
+	valueStr := getEnv(key, "")
+	if valueStr == "" {
+		return fallback
+	}
+	// Split by comma and trim spaces
+	parts := make([]string, 0)
+	for _, part := range strings.Split(valueStr, ",") {
+		trimmed := strings.TrimSpace(part)
+		if trimmed != "" {
+			parts = append(parts, trimmed)
+		}
+	}
+	return parts
 }
