@@ -16,9 +16,9 @@ type ProductModel struct {
 	CategoryID        uint           `gorm:"not null" json:"category_id"`
 	
 	// Pricing
-	Price             float64        `gorm:"type:decimal(10,2);not null" json:"price"`
-	CompareAtPrice    float64        `gorm:"type:decimal(10,2)" json:"compare_at_price,omitempty"`
-	CostPerItem       float64        `gorm:"type:decimal(10,2)" json:"cost_per_item,omitempty"`
+	Price             float64        `gorm:"type:decimal(15,2);not null" json:"price"`
+	CompareAtPrice    float64        `gorm:"type:decimal(15,2)" json:"compare_at_price,omitempty"`
+	CostPerItem       float64        `gorm:"type:decimal(15,2)" json:"cost_per_item,omitempty"`
 	
 	// Inventory
 	SKU               string         `gorm:"size:100;uniqueIndex" json:"sku,omitempty"`

@@ -5,11 +5,11 @@ import (
 )
 
 type ProductImage struct {
-	ID           uint
-	ProductID    uint
-	ImageURL     string
-	AltText      string
-	DisplayOrder int
-	IsPrimary    bool
-	CreatedAt    time.Time
+	ID           uint      `json:"id"`
+	ProductID    uint      `json:"product_id"`
+	ImageURL     string    `json:"image_url"`
+	AltText      string    `json:"alt_text"`
+	DisplayOrder int       `json:"display_order"`
+	IsPrimary    bool      `json:"is_primary"`
+	CreatedAt    time.Time `json:"created_at"`
 }

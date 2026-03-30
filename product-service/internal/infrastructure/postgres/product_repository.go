@@ -250,6 +250,40 @@ func (r *ProductRepository) ExistsSlug(ctx context.Context, slug string, exclude
 	return count > 0, nil
 }
 
+func (r *ProductRepository) AddImage(ctx context.Context, productID uint, image *domain.ProductImage) error {
+	// Make first image the primary one automatically
+	var count int64
+	r.db.WithContext(ctx).Model(&ProductImageModel{}).Where("product_id = ?", productID).Count(&count)
+
+	model := &ProductImageModel{
+		ProductID:    productID,
+		ImageURL:     image.ImageURL,
+		AltText:      image.AltText,
+		DisplayOrder: int(count),
+		IsPrimary:    count == 0,
+	}
+	if err := r.db.WithContext(ctx).Create(model).Error; err != nil {
+		return fmt.Errorf("failed to add image: %w", err)
+	}
+	image.ID = model.ID
+	image.ProductID = productID
+	image.DisplayOrder = model.DisplayOrder
+	image.IsPrimary = model.IsPrimary
+	image.CreatedAt = model.CreatedAt
+	return nil
+}
+
+func (r *ProductRepository) RemoveImage(ctx context.Context, imageID uint) error {
+	result := r.db.WithContext(ctx).Delete(&ProductImageModel{}, imageID)
+	if result.Error != nil {
+		return fmt.Errorf("failed to remove image: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("image not found")
+	}
+	return nil
+}
+
 func (r *ProductRepository) UpdateStock(ctx context.Context, productID uint, quantity int) error {
 	result := r.db.WithContext(ctx).
 		Model(&ProductModel{}).

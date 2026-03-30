@@ -7,21 +7,21 @@ import (
 )
 
 type Category struct {
-	ID           uint
-	Name         string
-	Slug         string
-	Description  string
-	ParentID     *uint
-	Parent       *Category   `gorm:"foreignKey:ParentID"`
-	Children     []Category  `gorm:"foreignKey:ParentID"`
-	ImageURL     string
-	IsActive     bool
-	DisplayOrder int
-	
+	ID           uint       `json:"id"`
+	Name         string     `json:"name"`
+	Slug         string     `json:"slug"`
+	Description  string     `json:"description"`
+	ParentID     *uint      `json:"parent_id"`
+	Parent       *Category  `json:"parent,omitempty" gorm:"foreignKey:ParentID"`
+	Children     []Category `json:"children,omitempty" gorm:"foreignKey:ParentID"`
+	ImageURL     string     `json:"image_url"`
+	IsActive     bool       `json:"is_active"`
+	DisplayOrder int        `json:"display_order"`
+
 	// Timestamps
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
-	DeletedAt    gorm.DeletedAt `gorm:"index"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `json:"-" gorm:"index"`
 }
 
 func (c *Category) IsRootCategory() bool {

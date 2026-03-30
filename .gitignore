@@ -4,3 +4,20 @@
 /*.exe
 *.log
 *.env
+
+# OS
+.DS_Store
+
+# Editor
+*.swp
+*.swo
+*~
+
+# Test coverage
+coverage.out
+coverage.*
+
+# Compiled binaries
+product-service/main
+product-service/product-service
+user-service/user-service

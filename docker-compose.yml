@@ -46,7 +46,7 @@ services:
       DB_NAME: ecommerce
       DB_SSLMODE: disable
       JWT_SECRET: production-secret-key-change-this
-      JWT_EXPIRE: 24h
+      JWT_EXPIRE: 168h
       REDIS_ADDR: redis:6379
       REDIS_PASSWORD: ""
       REDIS_DB: 0

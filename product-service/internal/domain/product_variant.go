@@ -6,32 +6,32 @@ import (
 )
 
 type ProductVariant struct {
-	ID        uint
-	ProductID uint
-	SKU       string
-	Barcode   string
+	ID        uint   `json:"id"`
+	ProductID uint   `json:"product_id"`
+	SKU       string `json:"sku"`
+	Barcode   string `json:"barcode"`
 
 	// Options stored as JSON
 	// Example: {"color": "Red", "size": "L"}
-	Options json.RawMessage `gorm:"type:jsonb"`
+	Options json.RawMessage `json:"options" gorm:"type:jsonb"`
 
 	// Pricing & inventory
-	Price          float64
-	CompareAtPrice float64
-	CostPerItem    float64
-	StockQuantity  int
+	Price          float64 `json:"price"`
+	CompareAtPrice float64 `json:"compare_at_price"`
+	CostPerItem    float64 `json:"cost_per_item"`
+	StockQuantity  int     `json:"stock_quantity"`
 
 	// Physical
-	Weight float64
+	Weight float64 `json:"weight"`
 
 	// Image
-	ImageURL string
+	ImageURL string `json:"image_url"`
 
 	// Status
-	IsAvailable bool
+	IsAvailable bool `json:"is_available"`
 
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 func (v *ProductVariant) IsInStock() bool {

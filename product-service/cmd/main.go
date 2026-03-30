@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -60,6 +61,13 @@ func main() {
 		&postgres.ProductModel{},
 		&postgres.ProductImageModel{},
 		&postgres.ProductVariantModel{},
+		// New tables for orders, reviews, Q&A, coupons
+		&postgres.OrderModel{},
+		&postgres.OrderItemModel{},
+		&postgres.ReviewModel{},
+		&postgres.ProductQAModel{},
+		&postgres.CouponModel{},
+		&postgres.CouponUsageModel{},
 	); err != nil {
 		log.Fatal("Failed to migrate database:", err)
 	}
@@ -68,6 +76,9 @@ func main() {
 	// Initialize repositories
 	productRepo := postgres.NewProductRepository(db)
 	categoryRepo := postgres.NewCategoryRepository(db)
+	orderRepo := postgres.NewOrderRepository(db)
+	reviewRepo := postgres.NewReviewRepository(db)
+	qaRepo := postgres.NewQARepository(db)
 	txManager := postgres.NewTransactionManager(db)
 
 	// Initialize services (without cache for now)
@@ -77,9 +88,12 @@ func main() {
 	// Initialize handlers
 	productHandler := handlers.NewProductHandler(productService)
 	categoryHandler := handlers.NewCategoryHandler(categoryService)
+	orderHandler := handlers.NewOrderHandler(orderRepo)
+	reviewHandler := handlers.NewReviewHandler(reviewRepo)
+	qaHandler := handlers.NewQAHandler(qaRepo)
 
 	// Setup routes
-	mux := setupRoutes(productHandler, categoryHandler, cfg, db)
+	mux := setupRoutes(productHandler, categoryHandler, orderHandler, reviewHandler, qaHandler, cfg, db)
 
 	// Apply middleware chain
 	var handler http.Handler = mux
@@ -101,6 +115,9 @@ func main() {
 		log.Printf("Features enabled:")
 		log.Printf("  - Database: PostgreSQL")
 		log.Printf("  - Cache: disabled")
+		log.Printf("  - Orders API: enabled")
+		log.Printf("  - Reviews API: enabled")
+		log.Printf("  - Q&A API: enabled")
 
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Failed to start server: %v", err)
@@ -128,6 +145,9 @@ func main() {
 func setupRoutes(
 	productHandler *handlers.ProductHandler,
 	categoryHandler *handlers.CategoryHandler,
+	orderHandler *handlers.OrderHandler,
+	reviewHandler *handlers.ReviewHandler,
+	qaHandler *handlers.QAHandler,
 	cfg *config.Config,
 	db *gorm.DB,
 ) *http.ServeMux {
@@ -136,14 +156,12 @@ func setupRoutes(
 	// Health check
 	mux.HandleFunc("/health", healthCheck(db))
 
-	// Public routes - Products (no auth required for reading)
+	// ==================== PRODUCT ROUTES ====================
 	mux.HandleFunc("/products", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
-			// List products - public
 			productHandler.ListProducts(w, r)
 		case http.MethodPost:
-			// Create product - requires auth
 			middleware.AuthMiddleware(cfg.JWTSecret)(
 				http.HandlerFunc(productHandler.CreateProduct),
 			).ServeHTTP(w, r)
@@ -152,19 +170,46 @@ func setupRoutes(
 		}
 	})
 
-	// Product by ID
 	mux.HandleFunc("/products/", func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+
+		// Handle /products/{id}/reviews
+		if strings.HasSuffix(path, "/reviews") {
+			reviewHandler.GetProductReviews(w, r)
+			return
+		}
+
+		// Handle /products/{id}/qa
+		if strings.HasSuffix(path, "/qa") {
+			qaHandler.GetProductQA(w, r)
+			return
+		}
+
+		// Handle /products/{id}/images/{imageId}  (DELETE)
+		if strings.Contains(path, "/images/") {
+			middleware.AuthMiddleware(cfg.JWTSecret)(
+				http.HandlerFunc(productHandler.DeleteProductImage),
+			).ServeHTTP(w, r)
+			return
+		}
+
+		// Handle /products/{id}/images  (POST)
+		if strings.HasSuffix(path, "/images") {
+			middleware.AuthMiddleware(cfg.JWTSecret)(
+				http.HandlerFunc(productHandler.AddProductImage),
+			).ServeHTTP(w, r)
+			return
+		}
+
+		// Handle /products/{id}
 		switch r.Method {
 		case http.MethodGet:
-			// Get product - public
 			productHandler.GetProduct(w, r)
 		case http.MethodPut:
-			// Update product - requires auth
 			middleware.AuthMiddleware(cfg.JWTSecret)(
 				http.HandlerFunc(productHandler.UpdateProduct),
 			).ServeHTTP(w, r)
 		case http.MethodDelete:
-			// Delete product - requires auth
 			middleware.AuthMiddleware(cfg.JWTSecret)(
 				http.HandlerFunc(productHandler.DeleteProduct),
 			).ServeHTTP(w, r)
@@ -173,14 +218,12 @@ func setupRoutes(
 		}
 	})
 
-	// Categories routes
+	// ==================== CATEGORY ROUTES ====================
 	mux.HandleFunc("/categories", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
-			// List categories - public
 			categoryHandler.ListCategories(w, r)
 		case http.MethodPost:
-			// Create category - requires auth
 			middleware.AuthMiddleware(cfg.JWTSecret)(
 				http.HandlerFunc(categoryHandler.CreateCategory),
 			).ServeHTTP(w, r)
@@ -189,9 +232,7 @@ func setupRoutes(
 		}
 	})
 
-	// Category by ID
 	mux.HandleFunc("/categories/", func(w http.ResponseWriter, r *http.Request) {
-		// Check if it's /categories/root
 		if r.URL.Path == "/categories/root" {
 			categoryHandler.GetRootCategories(w, r)
 			return
@@ -199,17 +240,169 @@ func setupRoutes(
 
 		switch r.Method {
 		case http.MethodGet:
-			// Get category - public
 			categoryHandler.GetCategory(w, r)
 		case http.MethodPut:
-			// Update category - requires auth
 			middleware.AuthMiddleware(cfg.JWTSecret)(
 				http.HandlerFunc(categoryHandler.UpdateCategory),
 			).ServeHTTP(w, r)
 		case http.MethodDelete:
-			// Delete category - requires auth
 			middleware.AuthMiddleware(cfg.JWTSecret)(
 				http.HandlerFunc(categoryHandler.DeleteCategory),
+			).ServeHTTP(w, r)
+		default:
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+
+	// ==================== ORDER ROUTES ====================
+	mux.HandleFunc("/orders", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			// Admin: list all orders
+			middleware.AuthMiddleware(cfg.JWTSecret)(
+				http.HandlerFunc(orderHandler.ListOrders),
+			).ServeHTTP(w, r)
+		case http.MethodPost:
+			// Customer: create order
+			middleware.AuthMiddleware(cfg.JWTSecret)(
+				http.HandlerFunc(orderHandler.CreateOrder),
+			).ServeHTTP(w, r)
+		default:
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+
+	mux.HandleFunc("/orders/stats", func(w http.ResponseWriter, r *http.Request) {
+		middleware.AuthMiddleware(cfg.JWTSecret)(
+			http.HandlerFunc(orderHandler.GetOrderStats),
+		).ServeHTTP(w, r)
+	})
+
+	mux.HandleFunc("/orders/", func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+
+		// Handle /orders/{id}/status
+		if strings.HasSuffix(path, "/status") {
+			middleware.AuthMiddleware(cfg.JWTSecret)(
+				http.HandlerFunc(orderHandler.UpdateOrderStatus),
+			).ServeHTTP(w, r)
+			return
+		}
+
+		// Handle /orders/{id}
+		switch r.Method {
+		case http.MethodGet:
+			middleware.AuthMiddleware(cfg.JWTSecret)(
+				http.HandlerFunc(orderHandler.GetOrder),
+			).ServeHTTP(w, r)
+		default:
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+
+	// User orders
+	mux.HandleFunc("/users/", func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/orders") {
+			middleware.AuthMiddleware(cfg.JWTSecret)(
+				http.HandlerFunc(orderHandler.GetUserOrders),
+			).ServeHTTP(w, r)
+			return
+		}
+		http.Error(w, "Not found", http.StatusNotFound)
+	})
+
+	// ==================== REVIEW ROUTES ====================
+	mux.HandleFunc("/reviews", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			// Admin: list all reviews
+			middleware.AuthMiddleware(cfg.JWTSecret)(
+				http.HandlerFunc(reviewHandler.ListReviews),
+			).ServeHTTP(w, r)
+		case http.MethodPost:
+			// Customer: create review
+			middleware.AuthMiddleware(cfg.JWTSecret)(
+				http.HandlerFunc(reviewHandler.CreateReview),
+			).ServeHTTP(w, r)
+		default:
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+
+	mux.HandleFunc("/reviews/", func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+
+		// Handle /reviews/{id}/status
+		if strings.HasSuffix(path, "/status") {
+			middleware.AuthMiddleware(cfg.JWTSecret)(
+				http.HandlerFunc(reviewHandler.UpdateReviewStatus),
+			).ServeHTTP(w, r)
+			return
+		}
+
+		// Handle /reviews/{id}/reply
+		if strings.HasSuffix(path, "/reply") {
+			middleware.AuthMiddleware(cfg.JWTSecret)(
+				http.HandlerFunc(reviewHandler.AddAdminReply),
+			).ServeHTTP(w, r)
+			return
+		}
+
+		// Handle /reviews/{id}
+		switch r.Method {
+		case http.MethodGet:
+			reviewHandler.GetReview(w, r)
+		case http.MethodDelete:
+			middleware.AuthMiddleware(cfg.JWTSecret)(
+				http.HandlerFunc(reviewHandler.DeleteReview),
+			).ServeHTTP(w, r)
+		default:
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+
+	// ==================== Q&A ROUTES ====================
+	mux.HandleFunc("/qa", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			// Admin: list all Q&A
+			middleware.AuthMiddleware(cfg.JWTSecret)(
+				http.HandlerFunc(qaHandler.ListQA),
+			).ServeHTTP(w, r)
+		case http.MethodPost:
+			// Customer: create question
+			middleware.AuthMiddleware(cfg.JWTSecret)(
+				http.HandlerFunc(qaHandler.CreateQuestion),
+			).ServeHTTP(w, r)
+		default:
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+
+	mux.HandleFunc("/qa/pending-count", func(w http.ResponseWriter, r *http.Request) {
+		middleware.AuthMiddleware(cfg.JWTSecret)(
+			http.HandlerFunc(qaHandler.GetPendingCount),
+		).ServeHTTP(w, r)
+	})
+
+	mux.HandleFunc("/qa/", func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+
+		// Handle /qa/{id}/answer
+		if strings.HasSuffix(path, "/answer") {
+			middleware.AuthMiddleware(cfg.JWTSecret)(
+				http.HandlerFunc(qaHandler.AnswerQuestion),
+			).ServeHTTP(w, r)
+			return
+		}
+
+		// Handle /qa/{id}
+		switch r.Method {
+		case http.MethodGet:
+			qaHandler.GetQA(w, r)
+		case http.MethodDelete:
+			middleware.AuthMiddleware(cfg.JWTSecret)(
+				http.HandlerFunc(qaHandler.DeleteQA),
 			).ServeHTTP(w, r)
 		default:
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)

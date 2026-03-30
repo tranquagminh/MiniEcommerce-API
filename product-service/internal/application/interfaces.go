@@ -19,6 +19,8 @@ type ProductRepository interface {
 	ExistsSKU(ctx context.Context, sku string, excludeID uint) (bool, error)
 	ExistsSlug(ctx context.Context, slug string, excludeID uint) (bool, error)
 	UpdateStock(ctx context.Context, productID uint, quantity int) error
+	AddImage(ctx context.Context, productID uint, image *domain.ProductImage) error
+	RemoveImage(ctx context.Context, imageID uint) error
 	WithTx(tx *gorm.DB) ProductRepository
 }
 

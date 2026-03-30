@@ -17,6 +17,9 @@ type UserModel struct {
 	Phone     string         `gorm:"size:20" json:"phone,omitempty"`
 	Gender    string         `gorm:"size:10" json:"gender,omitempty"` // male, female, other
 	Birthday  *time.Time     `gorm:"type:date" json:"birthday,omitempty"`
+	Role      string         `gorm:"size:20;default:customer" json:"role"` // customer, admin
+	AvatarURL string         `gorm:"size:500" json:"avatar_url,omitempty"`
+	IsActive  bool           `gorm:"default:true" json:"is_active"`
 	LastLogin *time.Time     `json:"last_login,omitempty"`
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
@@ -40,15 +43,17 @@ func (m *UserModel) ToDomain() *domain.User {
 		Password:  m.Password,
 		FirstName: m.FirstName,
 		LastName:  m.LastName,
-		Phone:     m.Phone,  // ✅
-		Gender:    m.Gender, // ✅
+		Phone:     m.Phone,
+		Gender:    m.Gender,
 		Birthday:  m.Birthday,
+		Role:      m.Role,
+		AvatarURL: m.AvatarURL,
+		IsActive:  m.IsActive,
 		LastLogin: m.LastLogin,
 		CreatedAt: m.CreatedAt,
 		UpdatedAt: m.UpdatedAt,
 		DeletedAt: deletedAt,
 	}
-
 }
 
 // FromDomain coverts domain entity to Gorm model
@@ -59,9 +64,12 @@ func (m *UserModel) FromDomain(user *domain.User) {
 	m.Password = user.Password
 	m.FirstName = user.FirstName
 	m.LastName = user.LastName
-	m.Phone = user.Phone   // ✅
-	m.Gender = user.Gender // ✅
+	m.Phone = user.Phone
+	m.Gender = user.Gender
 	m.Birthday = user.Birthday
+	m.Role = user.Role
+	m.AvatarURL = user.AvatarURL
+	m.IsActive = user.IsActive
 	m.LastLogin = user.LastLogin
 	m.CreatedAt = user.CreatedAt
 	m.UpdatedAt = user.UpdatedAt

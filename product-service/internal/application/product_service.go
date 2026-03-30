@@ -198,6 +198,17 @@ func (s *ProductService) ListProducts(ctx context.Context, filters *ProductFilte
 	return s.repo.List(ctx, filters)
 }
 
+func (s *ProductService) AddProductImage(ctx context.Context, productID uint, image *domain.ProductImage) error {
+	if image.ImageURL == "" {
+		return fmt.Errorf("image_url is required")
+	}
+	return s.repo.AddImage(ctx, productID, image)
+}
+
+func (s *ProductService) RemoveProductImage(ctx context.Context, imageID uint) error {
+	return s.repo.RemoveImage(ctx, imageID)
+}
+
 func (s *ProductService) UpdateStock(ctx context.Context, productID uint, quantity int) error {
 	if err := s.repo.UpdateStock(ctx, productID, quantity); err != nil {
 		return fmt.Errorf("failed to update stock: %w", err)

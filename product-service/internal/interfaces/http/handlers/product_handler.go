@@ -352,6 +352,85 @@ func (h *ProductHandler) ListProducts(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *ProductHandler) AddProductImage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Path: /products/{id}/images
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(parts) < 2 {
+		http.Error(w, "Invalid path", http.StatusBadRequest)
+		return
+	}
+	productID, err := strconv.ParseUint(parts[1], 10, 32)
+	if err != nil {
+		http.Error(w, "Invalid product ID", http.StatusBadRequest)
+		return
+	}
+
+	var req struct {
+		ImageURL string `json:"image_url"`
+		AltText  string `json:"alt_text"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.ImageURL == "" {
+		http.Error(w, "image_url is required", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+	image := &domain.ProductImage{
+		ImageURL: req.ImageURL,
+		AltText:  req.AltText,
+	}
+	if err := h.service.AddProductImage(ctx, uint(productID), image); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"message": "Image added successfully",
+		"image":   image,
+	})
+}
+
+func (h *ProductHandler) DeleteProductImage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Path: /products/{id}/images/{imageId}
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(parts) < 4 {
+		http.Error(w, "Invalid path", http.StatusBadRequest)
+		return
+	}
+	imageID, err := strconv.ParseUint(parts[3], 10, 32)
+	if err != nil {
+		http.Error(w, "Invalid image ID", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+	if err := h.service.RemoveProductImage(ctx, uint(imageID)); err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"message": "Image removed successfully",
+	})
+}
+
 func formatValidationError(fe validator.FieldError) string {
 	switch fe.Tag() {
 	case "required":
